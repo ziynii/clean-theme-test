@@ -4172,9 +4172,11 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     return `group:${hashString(children.map(item => descriptorKey(item.desc)).join('|'))}`;
   }
 
-  function isMemoryPatchLauncher(element) {
-    if (!(element instanceof HTMLElement)) return false;
-    if (element.id === 'zk-memory-fab') return true;
+  function memoryPatchRootFor(element) {
+    if (!(element instanceof HTMLElement)) return null;
+    if (element.id === 'zk-memory-fab') return element;
+    const inside = element.closest?.('#zk-memory-fab');
+    if (inside instanceof HTMLElement) return inside;
     const marker = [
       element.id,
       element.getAttribute('aria-label'),
@@ -4183,7 +4185,15 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       element.getAttribute('data-action'),
       element.textContent,
     ].filter(Boolean).join(' ');
-    return /(?:기억\s*패치|memory[-_ ]?patch)/i.test(marker);
+    if (/(?:기억\s*패치|memory[-_ ]?patch)/i.test(marker)) {
+      const live = d.querySelector('#zk-memory-fab');
+      return live instanceof HTMLElement ? live : element;
+    }
+    return null;
+  }
+
+  function isMemoryPatchLauncher(element) {
+    return memoryPatchRootFor(element) instanceof HTMLElement;
   }
 
   function isPointerTapLauncher(element) {
@@ -4197,30 +4207,64 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     return compact && draggableStyle && positioned;
   }
 
-  function pointerTap(element) {
+  function pointerTap(element, pointerType = 'mouse') {
     if (!(element instanceof HTMLElement)) throw new Error('원본 도구를 찾지 못했습니다.');
     const rect = element.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    const pointerId = 9191;
+    const x = rect.left + Math.max(1, rect.width) / 2;
+    const y = rect.top + Math.max(1, rect.height) / 2;
+    const pointerId = pointerType === 'touch' ? 9192 : 9191;
     const base = {
       bubbles: true, cancelable: true, composed: true,
-      pointerId, pointerType: 'mouse', isPrimary: true,
+      pointerId, pointerType, isPrimary: true,
       button: 0, clientX: x, clientY: y,
     };
-    const down = typeof PointerEvent === 'function'
-      ? new PointerEvent('pointerdown', { ...base, buttons: 1 })
-      : new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 1, clientX: x, clientY: y });
-    const up = typeof PointerEvent === 'function'
-      ? new PointerEvent('pointerup', { ...base, buttons: 0 })
-      : new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 0, clientX: x, clientY: y });
-    element.dispatchEvent(down);
-    element.dispatchEvent(up);
+    if (typeof PointerEvent === 'function') {
+      element.dispatchEvent(new PointerEvent('pointerdown', { ...base, buttons: 1 }));
+      element.dispatchEvent(new PointerEvent('pointerup', { ...base, buttons: 0 }));
+    } else {
+      element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 1, clientX: x, clientY: y }));
+      element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 0, clientX: x, clientY: y }));
+    }
+  }
+
+  function activateMemoryPatch(element) {
+    const root = memoryPatchRootFor(element) || d.querySelector('#zk-memory-fab');
+    if (!(root instanceof HTMLElement)) throw new Error('기억 패치 원본 버튼을 찾지 못했습니다.');
+    const trigger = root.matches?.('button,[role="button"],a')
+      ? root
+      : (root.querySelector?.('button,[role="button"],a') || element || root);
+
+    // 폴더가 원본을 숨긴 상태여도 일부 런처는 자기 visibility / hit-test 상태를
+    // 확인하며 패널을 연다. 실행하는 아주 짧은 순간만 숨김 속성을 풀고 곧바로 복구한다.
+    const hidden = [];
+    for (const node of [root, trigger]) {
+      if (!(node instanceof HTMLElement) || hidden.some(x => x.node === node)) continue;
+      hidden.push({ node, had: node.hasAttribute(HIDDEN_ATTR) });
+      if (node.hasAttribute(HIDDEN_ATTR)) node.removeAttribute(HIDDEN_ATTR);
+    }
+
+    try {
+      // iOS/Safari 계열 드래그형 FAB와 일반 click형 구현을 모두 커버한다.
+      pointerTap(trigger, 'touch');
+      pointerTap(trigger, 'mouse');
+      trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles:true, cancelable:true, view:w, button:0, buttons:1 }));
+      trigger.dispatchEvent(new MouseEvent('mouseup', { bubbles:true, cancelable:true, view:w, button:0, buttons:0 }));
+      trigger.click?.();
+      if (trigger !== root) root.click?.();
+    } finally {
+      // 패널 마운트가 동기/마이크로태스크로 끝난 뒤 원래 FAB만 다시 숨긴다.
+      w.setTimeout(() => {
+        hidden.forEach(({ node, had }) => {
+          if (had && node.isConnected) node.setAttribute(HIDDEN_ATTR, '1');
+        });
+      }, 120);
+    }
   }
 
   function activateOriginalElement(element) {
     if (!(element instanceof HTMLElement)) throw new Error('원본 도구를 찾지 못했습니다.');
-    if (isPointerTapLauncher(element)) pointerTap(element);
+    if (isMemoryPatchLauncher(element)) activateMemoryPatch(element);
+    else if (isPointerTapLauncher(element)) pointerTap(element);
     else element.click();
   }
 
@@ -4230,7 +4274,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     // 래퍼 전체를 숨기면 실행은 되어도 열린 메뉴까지 filter:opacity(0)을 상속받아
     // 보이지 않을 수 있으므로, 기억 패치는 버튼 자체만 숨긴다.
     const shell = isMemoryPatchLauncher(element)
-      ? element
+      ? (memoryPatchRootFor(element) || element)
       : (suppliedShell instanceof HTMLElement
           ? suppliedShell
           : (entry.hideDesc ? resolveDescriptor(entry.hideDesc) : null) || element);
