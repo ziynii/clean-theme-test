@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      85.0-integrated
+// @version      86.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -64,6 +64,7 @@ function onCozyFrameReady(event){
   sendToCozyScene('turn-store',{room,turns:roomTurnRows(room)});
   sendToCozyScene('settings',settings);
   document.documentElement.classList.add('cc-inner-controls-ready');
+  hideThemeLoadingScreen();
   return;
  }
  if(data?.type==='cc-private-ui-v164'&&data.command==='turn-sync'){
@@ -348,6 +349,56 @@ if(window[KEY]?.stop){
  /* Replace previous instance, including another color of this version. */
 }
 document.getElementById(ID)?.remove();
+
+/* V86: mask the room until the iframe finishes its first full Clean Cozy pass. */
+let ccThemeLoadingScreen=null;
+let ccThemeLoadingStyle=null;
+function showThemeLoadingScreen(){
+ if(!OUTER_ROOM||ccThemeLoadingScreen?.isConnected)return;
+ ccThemeLoadingStyle=document.createElement('style');
+ ccThemeLoadingStyle.id='cc-theme-loading-style';
+ ccThemeLoadingStyle.textContent=`
+  #cc-theme-loading-screen{
+   position:fixed!important;inset:0!important;z-index:2147483647!important;
+   display:flex!important;align-items:center!important;justify-content:center!important;
+   background:#FFFFFF!important;color:#626971!important;
+   font:600 14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;
+   letter-spacing:-.01em!important;
+  }
+  #cc-theme-loading-screen .cc-theme-loading-inner{
+   display:flex!important;align-items:center!important;gap:9px!important;
+   padding:12px 16px!important;border:1px solid #E5E7EA!important;border-radius:999px!important;
+   background:#FFFFFF!important;box-shadow:0 6px 24px rgba(0,0,0,.06)!important;
+  }
+  #cc-theme-loading-screen .cc-theme-loading-dot{
+   width:7px!important;height:7px!important;border-radius:50%!important;
+   background:${palette.strong}!important;
+   animation:ccThemeLoadingPulse 1s ease-in-out infinite!important;
+  }
+  @keyframes ccThemeLoadingPulse{
+   0%,100%{opacity:.35;transform:scale(.85)}
+   50%{opacity:1;transform:scale(1)}
+  }
+ `;
+ (document.head||document.documentElement).appendChild(ccThemeLoadingStyle);
+ ccThemeLoadingScreen=document.createElement('div');
+ ccThemeLoadingScreen.id='cc-theme-loading-screen';
+ ccThemeLoadingScreen.setAttribute('role','status');
+ ccThemeLoadingScreen.setAttribute('aria-live','polite');
+ ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div>';
+ document.body.appendChild(ccThemeLoadingScreen);
+}
+function hideThemeLoadingScreen(){
+ const screen=ccThemeLoadingScreen;
+ ccThemeLoadingScreen=null;
+ if(screen?.isConnected){
+  requestAnimationFrame(()=>requestAnimationFrame(()=>screen.remove()));
+ }
+ ccThemeLoadingStyle?.remove();
+ ccThemeLoadingStyle=null;
+}
+showThemeLoadingScreen();
+
 const defaults={avatarMode:'both',dialogueHighlight:false,removeNarration:false,lineBreakMode:'short'};
 let settings={...defaults};
 try{
@@ -3499,7 +3550,6 @@ function schedule(){
  requestAnimationFrame(()=>{
   scheduled=false;
   markFrameChatRoot();
-  announceFrameControls();
   finishPendingLineEdit();
   enhance();
   enhanceHeader();
@@ -3509,6 +3559,7 @@ function schedule(){
   makeSendArrow();
   updateActionAvailability();
   applyCaptureMode();
+  announceFrameControls();
  });
 }
 const actions=[
@@ -3792,7 +3843,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -3800,7 +3851,7 @@ function stop(){if(captureMode){captureMode=false;unbindCaptureScroll();restoreC
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
 
 
