@@ -1,3 +1,16 @@
+// ==UserScript==
+// @name         Clean Cozy Integrated Tools
+// @namespace    zeta-clean-cozy-integrated
+// @version      66.0-integrated
+// @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
+// @match        https://zeta-ai.io/*
+// @match        https://*.zeta-ai.io/*
+// @match        https://frame.pingpong.ai/*
+// @all-frames   true
+// @run-at       document-idle
+// @grant        none
+// ==/UserScript==
+
 (function(){const keys=['gray','pink','yellow','blue','green','purple'];const last=window.__ccLastPalette;const list=keys.filter(x=>x!==last);const pick=list[Math.floor(Math.random()*list.length)];window.__ccLastPalette=pick;window.__ccNextPalette=pick;})();
 (()=>{
 'use strict';
@@ -3583,4 +3596,2019 @@ function stop(){if(captureMode){captureMode=false;unbindCaptureScroll();restoreC
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
 document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+})();
+
+
+
+/* ============================================================
+   Integrated compatibility bridge
+   - Keep Zeta's native bottom action strip rendered in DOM.
+   - Clean Cozy's custom shortcuts still remain the visible controls.
+   - No native click handlers are removed or replaced.
+   ============================================================ */
+(() => {
+  'use strict';
+  if (location.hostname !== 'frame.pingpong.ai') return;
+  const id = 'cc-integrated-zk-native-toolbar-compat';
+  document.getElementById(id)?.remove();
+  const s = document.createElement('style');
+  s.id = id;
+  s.textContent = `
+html body.cc-frame-chat-root .cc-native-toolbar-group,
+html body.cc-frame-chat-root div.flex.flex-row.items-center.gap-1\\.5.px-2.py-1:has(>div.ml-auto button[aria-label="Report message"]):has(button[aria-label="Edit message"]):has(button[aria-label="Regenerate answers"]){
+  display:flex!important;
+  position:fixed!important;
+  left:8px!important;
+  top:8px!important;
+  right:auto!important;
+  bottom:auto!important;
+  opacity:0!important;
+  visibility:visible!important;
+  pointer-events:none!important;
+  user-select:none!important;
+  z-index:-1!important;
+  transform:none!important;
+}
+html body.cc-frame-chat-root .cc-native-toolbar-group .cc-native-toolbar-button,
+html body.cc-frame-chat-root .cc-native-toolbar-button{
+  display:flex!important;
+  visibility:visible!important;
+  opacity:1!important;
+  pointer-events:none!important;
+}
+`;
+  (document.head || document.documentElement).appendChild(s);
+})();
+
+
+/* ===== Integrated: Floating Tool Folder ===== */
+(() => {
+  'use strict';
+
+  /*
+   * Zeta Universal Floating Folder v1.2.2-compat
+   *
+   * 원칙
+   * - 제타 내부 API / 네트워크 / 프레임워크 내부 상태에 접근하지 않습니다.
+   * - 현재 문서에 렌더된 DOM만 읽습니다.
+   * - 등록한 도구 실행은 사용자가 폴더에서 직접 눌렀을 때만 연결합니다. 일반 도구는 HTMLElement.click(), 드래그형 탭 런처는 pointerdown → pointerup을 사용합니다.
+   * - cross-origin 문서끼리 DOM을 직접 만지지 않습니다.
+   * - outer에는 폴더 UI 하나만 표시하고, frame.pingpong.ai는 감지/실행 작업자로 동작합니다.
+   * - outer ↔ iframe 통신은 이 스크립트 인스턴스끼리의 window.postMessage()만 사용합니다.
+   */
+
+  const w = window;
+  const d = document;
+
+  const INSTANCE = '__ZETA_UNIVERSAL_FLOATING_FOLDER_V1__';
+  const HOST_ID = 'zeta-universal-floating-folder-v1';
+  const STORE_KEY = 'zeta-universal-floating-folder-items-v1';
+  const POS_KEY = 'zeta-universal-floating-folder-position-v1';
+  const HIDDEN_ATTR = 'data-zff-managed-v1';
+  const VERSION = '1.3.0-cozy-dock';
+  const CHANNEL = 'zeta-floating-folder-v11';
+  const IS_OUTER = /(^|\.)zeta-ai\.io$/i.test(location.hostname) && w.top === w;
+  const IS_FRAME_WORKER = location.hostname === 'frame.pingpong.ai';
+  const remoteActions = new Map();
+  let remoteGeometry = null;
+  let remoteDragHover = false;
+  let geometryInterval = 0;
+
+  try { w[INSTANCE]?.destroy?.(); } catch (_) {}
+
+  const disposers = [];
+  const hiddenStyles = new Map();
+  const actions = new Map();
+  const savedEntries = new Map();
+  const watchedRoots = new WeakSet();
+
+  let host = null;
+  let shadow = null;
+  let launcher = null;
+  let panel = null;
+  let content = null;
+  let manageButton = null;
+  let toastNode = null;
+  let observer = null;
+  let scanTimer = 0;
+  let restoreInterval = 0;
+  let open = false;
+  let managing = false;
+  let launcherDrag = null;
+  let candidateDrag = null;
+  let suppressLauncherClick = false;
+  let toastTimer = 0;
+
+  const INTERACTIVE = 'button,[role="button"],a,[tabindex]:not([tabindex="-1"]),input[type="button"],input[type="submit"]';
+
+  function on(target, type, handler, options) {
+    if (!target?.addEventListener) return;
+    target.addEventListener(type, handler, options);
+    disposers.push(() => {
+      try { target.removeEventListener(type, handler, options); } catch (_) {}
+    });
+  }
+
+  function clamp(v, min, max) {
+    return Math.min(Math.max(v, min), Math.max(min, max));
+  }
+
+  function cleanText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function shortText(value, max = 60) {
+    const text = cleanText(value);
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  }
+
+  function isOwnNode(node) {
+    return node instanceof Node && (node === host || host?.contains?.(node) || node?.getRootNode?.() === shadow);
+  }
+
+  // Clean Cozy의 기존 우측 하단 3개 버튼과 설정 패널은 폴더에 넣는 대상이 아니다.
+  // 기능/디자인을 건드리지 않고 드래그 후보에서만 제외한다.
+  function isProtectedCozyNode(node) {
+    if (!(node instanceof Element)) return false;
+    return !!node.closest?.('#cc-toggle,#cc-edit-shortcut,#cc-line-shortcut,#cc-panel,#cc-settings-backdrop');
+  }
+
+  function isUsableElement(element) {
+    if (!(element instanceof HTMLElement) || !element.isConnected || isOwnNode(element)) return false;
+    if (element === d.body || element === d.documentElement) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 4 || rect.height < 4) return false;
+    const style = getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  }
+
+  function isVisiblyPresent(element) {
+    if (!isUsableElement(element)) return false;
+    if (element.hasAttribute(HIDDEN_ATTR)) return false;
+    const style = getComputedStyle(element);
+    return Number(style.opacity || 1) > 0.01;
+  }
+
+  function accessibleName(element, fallback = '도구') {
+    if (!(element instanceof Element)) return fallback;
+    return shortText(
+      element.getAttribute('aria-label') ||
+      element.getAttribute('title') ||
+      element.getAttribute('data-label') ||
+      element.getAttribute('data-name') ||
+      element.textContent ||
+      fallback,
+      40
+    ) || fallback;
+  }
+
+  function iconFor(label, fallback = '✦') {
+    const text = cleanText(label).toLowerCase();
+    if (/캡처|capture|스크린샷|screenshot|사진/.test(text)) return '📸';
+    if (/대화.?저장|채팅.?저장|save.?chat/.test(text)) return '💬';
+    if (/저장함|보관함|archive|library/.test(text)) return '🗂️';
+    if (/저장|save/.test(text)) return '💾';
+    if (/동기화|sync/.test(text)) return '🔄';
+    if (/기억|memory/.test(text)) return '🧠';
+    if (/메모|memo|note/.test(text)) return '📝';
+    if (/검색|search|찾기/.test(text)) return '🔎';
+    if (/설정|setting|option/.test(text)) return '⚙️';
+    if (/수정|편집|edit/.test(text)) return '✏️';
+    if (/새.?답변|재생성|regenerate|retry/.test(text)) return '🔁';
+    if (/스냅샷|snapshot/.test(text)) return '🖼️';
+    if (/복사|copy/.test(text)) return '📋';
+    if (/내보내기|export/.test(text)) return '📤';
+    if (/가져오기|import/.test(text)) return '📥';
+    if (/삭제|delete|remove/.test(text)) return '🗑️';
+    if (/추가|add|new/.test(text)) return '➕';
+    if (/이력|history/.test(text)) return '🕘';
+    if (/게임|game|zetendo|젯텐도/.test(text)) return '🎮';
+    if (/페르소나|persona|프로필|profile/.test(text)) return '👤';
+    if (/요약|summary/.test(text)) return '🧾';
+    if (/캡처 도구|capture tool/.test(text)) return '📸';
+    return fallback;
+  }
+
+  function iconVisual(label, className = 'semantic-icon') {
+    const text = cleanText(label).toLowerCase();
+    let name = 'sparkles';
+    if (/캡처|capture|스크린샷|screenshot|사진/.test(text)) name = 'camera';
+    else if (/대화.?저장|채팅.?저장|save.?chat/.test(text)) name = 'message';
+    else if (/저장함|보관함|archive|library/.test(text)) name = 'archive';
+    else if (/저장|save/.test(text)) name = 'save';
+    else if (/동기화|sync/.test(text)) name = 'refresh';
+    else if (/기억|memory/.test(text)) name = 'brain';
+    else if (/메모|memo|note/.test(text)) name = 'note';
+    else if (/검색|search|찾기/.test(text)) name = 'search';
+    else if (/설정|setting|option/.test(text)) name = 'settings';
+    else if (/수정|편집|edit/.test(text)) name = 'edit';
+    else if (/새.?답변|재생성|regenerate|retry/.test(text)) name = 'rotate';
+    else if (/스냅샷|snapshot/.test(text)) name = 'image';
+    else if (/복사|copy/.test(text)) name = 'copy';
+    else if (/내보내기|export/.test(text)) name = 'upload';
+    else if (/가져오기|import/.test(text)) name = 'download';
+    else if (/삭제|delete|remove/.test(text)) name = 'trash';
+    else if (/추가|add|new/.test(text)) name = 'plus';
+    else if (/이력|history/.test(text)) name = 'clock';
+    else if (/게임|game|zetendo|젯텐도/.test(text)) name = 'game';
+    else if (/페르소나|persona|프로필|profile/.test(text)) name = 'user';
+    else if (/요약|summary/.test(text)) name = 'file';
+
+    const paths = {
+      camera:'<path d="M14.5 5 16 7h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-2h5Z"/><circle cx="12" cy="13" r="3.2"/>',
+      message:'<path d="M20 15a3 3 0 0 1-3 3H8l-4 3v-6a3 3 0 0 1-1-2.2V7a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v8Z"/><path d="M7 9h10M7 13h7"/>',
+      archive:'<path d="M4 7h16v13H4z"/><path d="M3 4h18v4H3zM9 12h6"/>',
+      save:'<path d="M5 3h12l3 3v15H4V4a1 1 0 0 1 1-1Z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>',
+      refresh:'<path d="M20 6v5h-5"/><path d="M19 11a7 7 0 1 0 1 5"/>',
+      brain:'<path d="M9.5 4.5A3 3 0 0 0 5 7a3 3 0 0 0 .6 1.8A3.5 3.5 0 0 0 7 15.5V18a2 2 0 0 0 4 0V6.5a2 2 0 0 0-1.5-2Z"/><path d="M14.5 4.5A3 3 0 0 1 19 7a3 3 0 0 1-.6 1.8A3.5 3.5 0 0 1 17 15.5V18a2 2 0 0 1-4 0V6.5a2 2 0 0 1 1.5-2ZM7 11h2M15 9h2M15 14h2"/>',
+      note:'<path d="M6 3h9l3 3v15H6z"/><path d="M15 3v4h4M9 11h6M9 15h6"/>',
+      search:'<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
+      settings:'<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A8 8 0 0 0 15 6.2L14.7 4h-5.4L9 6.2a8 8 0 0 0-1.5.9l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .3 0 .7.1 1l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.5.9l.3 2.2h5.4l.3-2.2a8 8 0 0 0 1.5-.9l2.4 1 2-3.4-2-1.5c0-.3.1-.7.1-1Z"/>',
+      edit:'<path d="m4 20 4.5-1 10-10-3.5-3.5-10 10L4 20Z"/><path d="m13.5 7 3.5 3.5"/>',
+      rotate:'<path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 0-2 5"/>',
+      image:'<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 15-5-5L5 20"/>',
+      copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
+      upload:'<path d="M12 16V4M8 8l4-4 4 4"/><path d="M4 15v5h16v-5"/>',
+      download:'<path d="M12 4v12M8 12l4 4 4-4"/><path d="M4 19h16"/>',
+      trash:'<path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/>',
+      plus:'<path d="M12 5v14M5 12h14"/>',
+      clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/>',
+      game:'<path d="M7 9h10a4 4 0 0 1 4 4v3a3 3 0 0 1-5 2l-2-2h-4l-2 2a3 3 0 0 1-5-2v-3a4 4 0 0 1 4-4Z"/><path d="M7 13h4M9 11v4M16 12h.01M18 14h.01"/>',
+      user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+      file:'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5M9 12h6M9 16h6"/>',
+      sparkles:'<path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z"/><path d="m18 14 .8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8L18 14Z"/>'
+    };
+    const node = d.createElement('div');
+    node.className = className;
+    node.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name]}</svg>`;
+    return node;
+  }
+
+  function safeEscape(value) {
+    try { return CSS.escape(String(value)); }
+    catch (_) { return String(value).replace(/["\\]/g, '\\$&'); }
+  }
+
+  function hashString(value) {
+    let hash = 2166136261;
+    const input = String(value || '');
+    for (let i = 0; i < input.length; i += 1) {
+      hash = Math.imul(hash ^ input.charCodeAt(i), 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  function rootHintFor(element) {
+    const root = element?.getRootNode?.();
+    if (!(root instanceof ShadowRoot)) return { type: 'document' };
+    const h = root.host;
+    return {
+      type: 'shadow',
+      hostId: h?.id || '',
+      hostTestId: h?.getAttribute?.('data-testid') || '',
+      hostTag: h?.tagName?.toLowerCase?.() || '',
+      hostClass: typeof h?.className === 'string'
+        ? h.className.split(/\s+/).filter(Boolean).slice(0, 3).join(' ')
+        : '',
+    };
+  }
+
+  function stableClasses(element) {
+    if (!(element instanceof HTMLElement) || typeof element.className !== 'string') return [];
+    return element.className
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter(name => /^[a-zA-Z_][\w-]{1,35}$/.test(name))
+      .filter(name => !/^(active|open|show|hidden|hover|focus|dragging|selected)$/i.test(name))
+      .slice(0, 4);
+  }
+
+  function describeElement(element) {
+    return {
+      tag: element?.tagName?.toLowerCase?.() || 'div',
+      id: element?.id || '',
+      testid: element?.getAttribute?.('data-testid') || '',
+      aria: element?.getAttribute?.('aria-label') || '',
+      title: element?.getAttribute?.('title') || '',
+      name: element?.getAttribute?.('name') || '',
+      text: shortText(element?.textContent || '', 80),
+      classes: stableClasses(element),
+      root: rootHintFor(element),
+    };
+  }
+
+  function descriptorKey(desc) {
+    return JSON.stringify(desc || {});
+  }
+
+  function allOpenRoots() {
+    const roots = [d];
+    const seen = new Set(roots);
+    for (let i = 0; i < roots.length; i += 1) {
+      const root = roots[i];
+      root.querySelectorAll?.('*').forEach(element => {
+        if (element === host) return;
+        if (element.shadowRoot && !seen.has(element.shadowRoot)) {
+          seen.add(element.shadowRoot);
+          roots.push(element.shadowRoot);
+        }
+      });
+    }
+    return roots;
+  }
+
+  function matchingRoots(desc) {
+    const roots = allOpenRoots();
+    if (desc?.root?.type !== 'shadow') return roots.filter(root => root instanceof Document);
+    return roots.filter(root => {
+      if (!(root instanceof ShadowRoot)) return false;
+      const h = root.host;
+      if (desc.root.hostId && h.id === desc.root.hostId) return true;
+      if (desc.root.hostTestId && h.getAttribute('data-testid') === desc.root.hostTestId) return true;
+      if (desc.root.hostTag && h.tagName?.toLowerCase() !== desc.root.hostTag) return false;
+      if (desc.root.hostClass) {
+        const classes = new Set(typeof h.className === 'string' ? h.className.split(/\s+/) : []);
+        return desc.root.hostClass.split(/\s+/).every(c => classes.has(c));
+      }
+      return true;
+    });
+  }
+
+  function elementMatchesDescriptor(element, desc) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (desc.tag && element.tagName.toLowerCase() !== desc.tag) return false;
+    if (desc.id && element.id !== desc.id) return false;
+    if (desc.testid && element.getAttribute('data-testid') !== desc.testid) return false;
+    if (desc.aria && element.getAttribute('aria-label') !== desc.aria) return false;
+    if (desc.title && element.getAttribute('title') !== desc.title) return false;
+    if (desc.name && element.getAttribute('name') !== desc.name) return false;
+    if (desc.classes?.length) {
+      const classes = new Set(typeof element.className === 'string' ? element.className.split(/\s+/) : []);
+      if (!desc.classes.every(c => classes.has(c))) return false;
+    }
+    if (!desc.id && !desc.testid && !desc.aria && !desc.title && !desc.name && desc.text) {
+      if (shortText(element.textContent || '', 80) !== desc.text) return false;
+    }
+    return true;
+  }
+
+  function resolveDescriptor(desc) {
+    if (!desc) return null;
+    const roots = matchingRoots(desc);
+
+    for (const root of roots) {
+      let candidates = [];
+      try {
+        if (desc.id) {
+          const found = root.querySelector?.(`#${safeEscape(desc.id)}`);
+          if (found) candidates = [found];
+        } else if (desc.testid) {
+          candidates = [...(root.querySelectorAll?.(`[data-testid="${safeEscape(desc.testid)}"]`) || [])];
+        } else if (desc.aria) {
+          candidates = [...(root.querySelectorAll?.(`[aria-label="${safeEscape(desc.aria)}"]`) || [])];
+        } else if (desc.title) {
+          candidates = [...(root.querySelectorAll?.(`[title="${safeEscape(desc.title)}"]`) || [])];
+        } else if (desc.name) {
+          candidates = [...(root.querySelectorAll?.(`[name="${safeEscape(desc.name)}"]`) || [])];
+        } else {
+          candidates = [...(root.querySelectorAll?.(desc.tag || '*') || [])];
+        }
+      } catch (_) {}
+
+      const found = candidates.find(element => elementMatchesDescriptor(element, desc) && !isOwnNode(element));
+      if (found instanceof HTMLElement) return found;
+    }
+    return null;
+  }
+
+  function interactiveElements(container) {
+    if (!(container instanceof Element)) return [];
+    const seen = new Set();
+    return [...container.querySelectorAll(INTERACTIVE)].filter(element => {
+      if (!(element instanceof HTMLElement) || seen.has(element) || isOwnNode(element) || isProtectedCozyNode(element)) return false;
+      seen.add(element);
+      if (!isVisiblyPresent(element)) return false;
+      const rect = element.getBoundingClientRect();
+      return rect.width >= 10 && rect.height >= 10 && rect.width <= 180 && rect.height <= 120;
+    });
+  }
+
+  function compactToolbar(container, buttons) {
+    if (!(container instanceof HTMLElement) || buttons.length < 2 || buttons.length > 16) return false;
+    const rect = container.getBoundingClientRect();
+    if (rect.width < 20 || rect.height < 20) return false;
+    if (rect.width > Math.min(620, w.innerWidth * 0.98)) return false;
+    if (rect.height > Math.min(420, w.innerHeight * 0.75)) return false;
+    if (rect.width * rect.height > 180000) return false;
+    return true;
+  }
+
+  function groupFromPath(path) {
+    const elements = path.filter(node => node instanceof HTMLElement && !isOwnNode(node) && !isProtectedCozyNode(node));
+    for (const element of elements) {
+      if (!isUsableElement(element)) continue;
+      const buttons = interactiveElements(element);
+      if (compactToolbar(element, buttons)) return { container: element, buttons };
+    }
+    return null;
+  }
+
+  function groupLabel(container, buttons) {
+    const explicit = shortText(
+      container?.getAttribute?.('aria-label') ||
+      container?.getAttribute?.('title') ||
+      container?.getAttribute?.('data-tool-name') ||
+      container?.getAttribute?.('data-name') || '',
+      30
+    );
+    if (explicit) return explicit;
+    const labels = buttons.map(btn => accessibleName(btn, '')).filter(Boolean);
+    return labels[0] || '도구 모음';
+  }
+
+  const VISUAL_PROPS = [
+    'display', 'box-sizing', 'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height',
+    'padding', 'margin', 'gap', 'align-items', 'justify-content', 'flex-direction', 'flex-wrap',
+    'grid-template-columns', 'grid-template-rows',
+    'font-family', 'font-size', 'font-weight', 'font-style', 'line-height', 'letter-spacing', 'text-align',
+    'color', 'background', 'background-color', 'background-image', 'background-size', 'background-position',
+    'border', 'border-width', 'border-style', 'border-color', 'border-radius', 'outline',
+    'box-shadow', 'filter', 'opacity', 'overflow', 'object-fit', 'object-position'
+  ];
+
+  function sanitizeCloneTree(clone) {
+    if (!(clone instanceof Element)) return;
+    [clone, ...clone.querySelectorAll('*')].forEach(node => {
+      node.removeAttribute?.('id');
+      node.removeAttribute?.(HIDDEN_ATTR);
+      [...(node.attributes || [])].forEach(attr => {
+        if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
+      });
+      if (node instanceof HTMLElement) {
+        node.style.setProperty('pointer-events', 'none', 'important');
+        node.tabIndex = -1;
+      }
+    });
+  }
+
+  function visualTemplateFrom(element) {
+    if (!(element instanceof HTMLElement)) return null;
+    const clone = element.cloneNode(true);
+    const sources = [element, ...element.querySelectorAll('*')];
+    const targets = [clone, ...clone.querySelectorAll('*')];
+
+    for (let i = 0; i < Math.min(sources.length, targets.length); i += 1) {
+      const src = sources[i];
+      const dst = targets[i];
+      if (!(dst instanceof HTMLElement)) continue;
+      let style;
+      try { style = getComputedStyle(src); } catch (_) { continue; }
+      VISUAL_PROPS.forEach(prop => {
+        const value = style.getPropertyValue(prop);
+        if (value) dst.style.setProperty(prop, value, 'important');
+      });
+    }
+
+    sanitizeCloneTree(clone);
+    if (clone instanceof HTMLElement) {
+      clone.style.setProperty('position', 'static', 'important');
+      clone.style.setProperty('inset', 'auto', 'important');
+      clone.style.setProperty('left', 'auto', 'important');
+      clone.style.setProperty('right', 'auto', 'important');
+      clone.style.setProperty('top', 'auto', 'important');
+      clone.style.setProperty('bottom', 'auto', 'important');
+      clone.style.setProperty('transform', 'none', 'important');
+      clone.style.setProperty('margin', '0', 'important');
+      clone.style.setProperty('opacity', '1', 'important');
+      clone.style.setProperty('visibility', 'visible', 'important');
+      clone.style.setProperty('pointer-events', 'none', 'important');
+    }
+    return clone;
+  }
+
+  function hideElement(element) {
+    if (!(element instanceof HTMLElement) || hiddenStyles.has(element)) return;
+    hiddenStyles.set(element, {
+      opacity: element.style.getPropertyValue('opacity'),
+      opacityPriority: element.style.getPropertyPriority('opacity'),
+      pointerEvents: element.style.getPropertyValue('pointer-events'),
+      pointerPriority: element.style.getPropertyPriority('pointer-events'),
+    });
+    element.setAttribute(HIDDEN_ATTR, '1');
+    element.style.setProperty('opacity', '0', 'important');
+    element.style.setProperty('pointer-events', 'none', 'important');
+  }
+
+  function restoreElement(element) {
+    const saved = hiddenStyles.get(element);
+    if (!saved) return;
+    try {
+      element.removeAttribute(HIDDEN_ATTR);
+      if (saved.opacity) element.style.setProperty('opacity', saved.opacity, saved.opacityPriority);
+      else element.style.removeProperty('opacity');
+      if (saved.pointerEvents) element.style.setProperty('pointer-events', saved.pointerEvents, saved.pointerPriority);
+      else element.style.removeProperty('pointer-events');
+    } catch (_) {}
+    hiddenStyles.delete(element);
+  }
+
+  function restoreAllHidden() {
+    [...hiddenStyles.keys()].forEach(restoreElement);
+  }
+
+  function serializeActions() {
+    return [...actions.values()].map(action => ({
+      id: action.id,
+      kind: action.kind,
+      label: action.label,
+      icon: iconFor(action.label),
+      children: action.kind === 'group' ? (action.children || []).map((child, index) => ({
+        index,
+        label: child.label,
+        icon: iconFor(child.label),
+      })) : [],
+    }));
+  }
+
+  function postToOuter(message) {
+    if (!IS_FRAME_WORKER || w.top === w) return;
+    try { w.top.postMessage({ channel: CHANNEL, ...message }, '*'); } catch (_) {}
+  }
+
+  function notifyOuter() {
+    if (IS_FRAME_WORKER) postToOuter({ type: 'SYNC', items: serializeActions() });
+  }
+
+  function persist() {
+    const payload = [...savedEntries.values()];
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(payload)); } catch (_) {}
+    notifyOuter();
+  }
+
+  function loadSaved() {
+    let rows = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
+      if (Array.isArray(parsed)) rows = parsed;
+    } catch (_) {}
+    rows.forEach(row => {
+      if (row?.id && (row.kind === 'single' || row.kind === 'group')) savedEntries.set(String(row.id), row);
+    });
+  }
+
+  function actionIdForSingle(desc) {
+    return `single:${hashString(descriptorKey(desc))}`;
+  }
+
+  function actionIdForGroup(children) {
+    return `group:${hashString(children.map(item => descriptorKey(item.desc)).join('|'))}`;
+  }
+
+  function isPointerTapLauncher(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.id === 'zetakit-floating-launcher') return true;
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const compact = rect.width > 0 && rect.height > 0 && rect.width <= 96 && rect.height <= 96;
+    const draggableStyle = style.touchAction === 'none' && /grab|grabbing/i.test(style.cursor || '');
+    const positioned = ['fixed', 'absolute', 'sticky'].includes(style.position);
+    return compact && draggableStyle && positioned;
+  }
+
+  function pointerTap(element) {
+    if (!(element instanceof HTMLElement)) throw new Error('원본 도구를 찾지 못했습니다.');
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const pointerId = 9191;
+    const base = {
+      bubbles: true, cancelable: true, composed: true,
+      pointerId, pointerType: 'mouse', isPrimary: true,
+      button: 0, clientX: x, clientY: y,
+    };
+    const down = typeof PointerEvent === 'function'
+      ? new PointerEvent('pointerdown', { ...base, buttons: 1 })
+      : new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 1, clientX: x, clientY: y });
+    const up = typeof PointerEvent === 'function'
+      ? new PointerEvent('pointerup', { ...base, buttons: 0 })
+      : new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 0, clientX: x, clientY: y });
+    element.dispatchEvent(down);
+    element.dispatchEvent(up);
+  }
+
+  function activateOriginalElement(element) {
+    if (!(element instanceof HTMLElement)) throw new Error('원본 도구를 찾지 못했습니다.');
+    if (isPointerTapLauncher(element)) pointerTap(element);
+    else element.click();
+  }
+
+  function buildSingleAction(entry, element, suppliedShell = null) {
+    const visual = visualTemplateFrom(element);
+    const shell = suppliedShell instanceof HTMLElement
+      ? suppliedShell
+      : (entry.hideDesc ? resolveDescriptor(entry.hideDesc) : null) || element;
+    const action = {
+      id: entry.id,
+      kind: 'single',
+      label: entry.label || accessibleName(element),
+      desc: entry.desc,
+      element,
+      visual,
+      hiddenNodes: [shell],
+      run() {
+        const current = element?.isConnected ? element : resolveDescriptor(entry.desc);
+        if (!(current instanceof HTMLElement)) throw new Error('원본 도구를 찾지 못했습니다.');
+        activateOriginalElement(current);
+      }
+    };
+    hideElement(shell);
+    return action;
+  }
+
+  function buildGroupAction(entry, elements, suppliedContainer = null) {
+    const children = entry.children.map((saved, index) => {
+      const element = elements[index];
+      return {
+        label: saved.label || accessibleName(element, `기능 ${index + 1}`),
+        desc: saved.desc,
+        element,
+        visual: visualTemplateFrom(element),
+        run() {
+          const current = element?.isConnected ? element : resolveDescriptor(saved.desc);
+          if (!(current instanceof HTMLElement)) throw new Error('원본 하위 버튼을 찾지 못했습니다.');
+          activateOriginalElement(current);
+        }
+      };
+    });
+    const container = suppliedContainer instanceof HTMLElement
+      ? suppliedContainer
+      : (entry.containerDesc ? resolveDescriptor(entry.containerDesc) : null);
+    const hiddenNodes = container ? [container] : elements;
+    hiddenNodes.forEach(hideElement);
+    return {
+      id: entry.id,
+      kind: 'group',
+      label: entry.label || children[0]?.label || '도구 모음',
+      children,
+      visual: children[0]?.visual?.cloneNode(true) || null,
+      hiddenNodes,
+    };
+  }
+
+  function activateSavedEntry(entry) {
+    if (!entry || actions.has(entry.id)) return false;
+
+    if (entry.kind === 'single') {
+      const element = resolveDescriptor(entry.desc);
+      if (!(element instanceof HTMLElement)) return false;
+      const shell = entry.hideDesc ? resolveDescriptor(entry.hideDesc) : null;
+      actions.set(entry.id, buildSingleAction(entry, element, shell));
+      return true;
+    }
+
+    if (entry.kind === 'group') {
+      const elements = (entry.children || []).map(child => resolveDescriptor(child.desc));
+      if (elements.length < 2 || elements.some(el => !(el instanceof HTMLElement))) return false;
+      const container = entry.containerDesc ? resolveDescriptor(entry.containerDesc) : null;
+      actions.set(entry.id, buildGroupAction(entry, elements, container));
+      return true;
+    }
+    return false;
+  }
+
+  function restoreSavedEntries() {
+    let changed = false;
+    for (const entry of savedEntries.values()) {
+      if (actions.has(entry.id)) {
+        const action = actions.get(entry.id);
+        const live = action.kind === 'group'
+          ? action.children.every(child => child.element?.isConnected)
+          : action.element?.isConnected;
+        if (live) continue;
+        action.hiddenNodes?.forEach(restoreElement);
+        actions.delete(entry.id);
+      }
+      if (activateSavedEntry(entry)) changed = true;
+    }
+    if (changed) { render(); notifyOuter(); }
+  }
+
+  function registerSingle(element, shell = null) {
+    if (!(element instanceof HTMLElement) || isOwnNode(element) || isProtectedCozyNode(element)) return;
+    if (!(shell instanceof HTMLElement) || isOwnNode(shell) || isProtectedCozyNode(shell)) shell = element;
+    const desc = describeElement(element);
+    const hideDesc = shell === element ? null : describeElement(shell);
+    const id = actionIdForSingle(desc);
+    if (savedEntries.has(id)) {
+      activateSavedEntry(savedEntries.get(id));
+      render();
+      toast('이미 폴더에 들어 있는 도구예요');
+      notifyOuter();
+      return;
+    }
+    const entry = {
+      id,
+      kind: 'single',
+      label: accessibleName(element),
+      desc,
+      hideDesc,
+    };
+    savedEntries.set(id, entry);
+    persist();
+    actions.set(id, buildSingleAction(entry, element, shell));
+    render();
+    toast(`${entry.label}를 폴더에 넣었어요`);
+    notifyOuter();
+  }
+
+  function registerGroup(container, buttons) {
+    if (isProtectedCozyNode(container)) return;
+    buttons = buttons.filter(el => el instanceof HTMLElement && !el.hasAttribute(HIDDEN_ATTR) && !isProtectedCozyNode(el));
+    if (buttons.length < 2) {
+      registerSingle(buttons[0] || container);
+      return;
+    }
+    const children = buttons.map(element => ({
+      label: accessibleName(element),
+      desc: describeElement(element),
+    }));
+    const id = actionIdForGroup(children);
+    if (savedEntries.has(id)) {
+      activateSavedEntry(savedEntries.get(id));
+      render();
+      toast('이미 폴더에 들어 있는 도구 모음이에요');
+      notifyOuter();
+      return;
+    }
+    const entry = {
+      id,
+      kind: 'group',
+      label: groupLabel(container, buttons),
+      containerDesc: describeElement(container),
+      children,
+    };
+    savedEntries.set(id, entry);
+    persist();
+    actions.set(id, buildGroupAction(entry, buttons, container));
+    render();
+    toast(`${entry.label}를 폴더에 넣었어요`);
+    notifyOuter();
+  }
+
+  function removeAction(id) {
+    const action = actions.get(id);
+    action?.hiddenNodes?.forEach(restoreElement);
+    actions.delete(id);
+    savedEntries.delete(id);
+    persist();
+    render();
+    toast(`${action?.label || '도구'}를 밖으로 꺼냈어요`);
+    notifyOuter();
+  }
+
+  function visualShellFor(trigger, pathElements, movedRecords = []) {
+    if (!(trigger instanceof HTMLElement)) return trigger;
+    const triggerRect = trigger.getBoundingClientRect();
+    const movedSet = new Set(movedRecords.map(item => item.element));
+    const chain = [];
+    for (let current = trigger; current instanceof HTMLElement && chain.length < 6; current = current.parentElement) {
+      if (isOwnNode(current)) break;
+      const rect = current.getBoundingClientRect();
+      if (rect.width < 12 || rect.height < 12) continue;
+      if (rect.width > 180 || rect.height > 180) break;
+      if (rect.width > triggerRect.width * 5 || rect.height > triggerRect.height * 5) break;
+      chain.push(current);
+    }
+    // 실제 드래그와 함께 움직인 가장 바깥의 작은 래퍼를 최우선으로 선택.
+    const movedShells = chain.filter(el => movedSet.has(el));
+    if (movedShells.length) return movedShells[movedShells.length - 1];
+
+    // 배경/보더/그림자를 가진 시각적 외곽 래퍼를 선택.
+    const visualShells = chain.filter(el => {
+      const st = getComputedStyle(el);
+      const bg = st.backgroundColor;
+      const hasBg = bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)';
+      const hasBorder = parseFloat(st.borderTopWidth || '0') > 0 || parseFloat(st.borderLeftWidth || '0') > 0;
+      const hasShadow = st.boxShadow && st.boxShadow !== 'none';
+      const radius = parseFloat(st.borderRadius || '0') || 0;
+      return hasBg || hasBorder || hasShadow || radius >= 8;
+    });
+    if (visualShells.length) return visualShells[visualShells.length - 1];
+
+    const pathShell = pathElements.find(el => el !== trigger && chain.includes(el));
+    return pathShell || trigger;
+  }
+
+  function chooseCandidateFromDrag(drag) {
+    const pathElements = drag.path.filter(node => node instanceof HTMLElement && !isOwnNode(node));
+
+    // 1) 먼저 실제로 여러 버튼이 한 컨테이너에 묶여 있으면 그룹으로 취급.
+    const grouped = groupFromPath(pathElements);
+    if (grouped) return { type: 'group', ...grouped };
+
+    // 2) fixed/absolute 여부를 보지 않고, 드래그 전후 좌표가 실제로 달라진 요소를 찾음.
+    const moved = [];
+    for (const rec of drag.rects) {
+      const element = rec.element;
+      if (!(element instanceof HTMLElement) || !element.isConnected || isOwnNode(element)) continue;
+      const now = element.getBoundingClientRect();
+      const delta = Math.hypot(now.left - rec.left, now.top - rec.top);
+      if (delta >= 3) moved.push({ element, delta, area: now.width * now.height });
+    }
+
+    // 이동한 요소 중 툴바가 발견되면 그 그룹을 우선.
+    for (const item of moved) {
+      const buttons = interactiveElements(item.element);
+      if (compactToolbar(item.element, buttons)) {
+        return { type: 'group', container: item.element, buttons };
+      }
+    }
+
+    // 3) 실제 클릭 가능한 요소를 실행 타깃으로 잡되, 숨김은 외곽 시각적 래퍼 전체에 적용.
+    const interactive = pathElements.find(element => element.matches?.(INTERACTIVE));
+    if (interactive) {
+      const shell = visualShellFor(interactive, pathElements, moved);
+      return { type: 'single', element: interactive, shell };
+    }
+
+    // 4) 클릭 요소가 명확하지 않으면 실제로 움직인 가장 작은 요소를 실행 타깃으로 선택하고 외곽 래퍼를 찾음.
+    moved.sort((a, b) => a.area - b.area || b.delta - a.delta);
+    if (moved[0]?.element) {
+      const element = moved[0].element;
+      const shell = visualShellFor(element, pathElements, moved);
+      return { type: 'single', element, shell };
+    }
+
+    // 5) 마지막 fallback도 동일하게 외곽 래퍼를 함께 잡음.
+    const fallback = pathElements.find(element => isUsableElement(element));
+    return fallback ? { type: 'single', element: fallback, shell: visualShellFor(fallback, pathElements, moved) } : null;
+  }
+
+  function candidatePath(event) {
+    const path = event.composedPath?.() || [];
+    return path.filter(node => node instanceof HTMLElement && !isOwnNode(node));
+  }
+
+  function beginCandidateDrag(event) {
+    if (event.pointerType !== 'touch' && event.button !== 0) return;
+    const rawPath = event.composedPath?.() || [];
+    if (rawPath.some(node => isOwnNode(node))) return;
+    if (rawPath.some(node => isProtectedCozyNode(node))) return;
+    const path = rawPath.filter(node => node instanceof HTMLElement && !isOwnNode(node) && !isProtectedCozyNode(node));
+    if (!path.length) return;
+
+    const rects = [];
+    path.slice(0, 10).forEach(element => {
+      if (!isUsableElement(element)) return;
+      const rect = element.getBoundingClientRect();
+      if (rect.width > w.innerWidth * 0.98 && rect.height > w.innerHeight * 0.8) return;
+      rects.push({ element, left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+    });
+
+    candidateDrag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      path,
+      rects,
+      moved: false,
+      hovering: false,
+    };
+    host?.classList.add('drop-ready');
+    if (IS_FRAME_WORKER) postToOuter({ type: 'DRAG_STATE', active: true, hovering: false });
+  }
+
+  function pointOverLauncher(clientX, clientY) {
+    let x = clientX;
+    let y = clientY;
+    let rect = launcher?.getBoundingClientRect?.() || null;
+    if (!rect && IS_FRAME_WORKER && remoteGeometry?.launcher && remoteGeometry?.frame) {
+      x = remoteGeometry.frame.left + clientX;
+      y = remoteGeometry.frame.top + clientY;
+      rect = remoteGeometry.launcher;
+    }
+    if (!rect) return false;
+    const pad = 14;
+    return x >= rect.left - pad && x <= rect.right + pad && y >= rect.top - pad && y <= rect.bottom + pad;
+  }
+
+  function moveCandidateDrag(event) {
+    if (!candidateDrag || candidateDrag.pointerId !== event.pointerId) return;
+    if (Math.hypot(event.clientX - candidateDrag.startX, event.clientY - candidateDrag.startY) > 5) {
+      candidateDrag.moved = true;
+    }
+    candidateDrag.hovering = candidateDrag.moved && pointOverLauncher(event.clientX, event.clientY);
+    host?.classList.toggle('drop-hover', candidateDrag.hovering);
+    if (IS_FRAME_WORKER && remoteDragHover !== candidateDrag.hovering) {
+      remoteDragHover = candidateDrag.hovering;
+      postToOuter({ type: 'DRAG_STATE', active: true, hovering: remoteDragHover });
+    }
+    // 중요: 다른 유저스크립트의 원래 드래그를 깨지 않도록 preventDefault/stopPropagation 하지 않음.
+  }
+
+  function endCandidateDrag(event) {
+    if (!candidateDrag || candidateDrag.pointerId !== event.pointerId) return;
+    const drag = candidateDrag;
+    candidateDrag = null;
+    host?.classList.remove('drop-ready', 'drop-hover');
+    if (IS_FRAME_WORKER) {
+      remoteDragHover = false;
+      postToOuter({ type: 'DRAG_STATE', active: false, hovering: false });
+    }
+
+    if (!drag.moved || !drag.hovering) return;
+    const candidate = chooseCandidateFromDrag(drag);
+    if (!candidate) {
+      toast('이 도구의 메뉴 구조를 잡지 못했어요');
+      return;
+    }
+    if (candidate.type === 'group') registerGroup(candidate.container, candidate.buttons);
+    else registerSingle(candidate.element, candidate.shell);
+  }
+
+  function watchRoot(root) {
+    if (!root?.addEventListener || watchedRoots.has(root)) return;
+    watchedRoots.add(root);
+    on(root, 'pointerdown', beginCandidateDrag, true);
+    on(root, 'pointermove', moveCandidateDrag, true);
+    on(root, 'pointerup', endCandidateDrag, true);
+    on(root, 'pointercancel', endCandidateDrag, true);
+  }
+
+  function refreshRoots() {
+    allOpenRoots().forEach(watchRoot);
+  }
+
+  function makeVisualNode(template) {
+    if (!(template instanceof Element)) {
+      const fallback = d.createElement('div');
+      fallback.className = 'fallback-icon';
+      fallback.textContent = '✦';
+      return fallback;
+    }
+    const clone = template.cloneNode(true);
+    if (clone instanceof HTMLElement) {
+      clone.style.setProperty('pointer-events', 'none', 'important');
+      clone.style.setProperty('opacity', '1', 'important');
+    }
+    return clone;
+  }
+
+  function execute(run, label) {
+    closePanel();
+    try {
+      run();
+    } catch (error) {
+      console.error('[Zeta Floating Folder]', label, error);
+      toast(`${label} 실행 실패 · 원본 버튼을 다시 찾지 못했어요`);
+    }
+  }
+
+  function render() {
+    if (!content) return;
+    content.replaceChildren();
+    manageButton.textContent = managing ? '완료' : '정리';
+    host.classList.toggle('managing', managing);
+    const allActions = [...actions.values(), ...remoteActions.values()];
+    host.classList.toggle('has-items', allActions.length > 0);
+
+    if (!allActions.length) {
+      const empty = d.createElement('div');
+      empty.className = 'empty';
+      empty.innerHTML = '<strong>비어 있어요</strong><span>넣고 싶은 플로팅 메뉴를<br>폴더 위로 드래그해 놓아주세요.</span>';
+      content.appendChild(empty);
+      return;
+    }
+
+    const grid = d.createElement('div');
+    grid.className = 'grid';
+
+    allActions.forEach(action => {
+      const item = d.createElement('div');
+      item.className = 'item';
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      item.setAttribute('aria-label', action.label);
+
+      const visual = d.createElement('div');
+      visual.className = 'visual';
+      visual.appendChild(iconVisual(action.label));
+
+      const label = d.createElement('div');
+      label.className = 'label';
+      label.textContent = action.label;
+
+      item.append(visual, label);
+
+      const activate = () => {
+        if (managing) return;
+        if (action.kind === 'group' && action.children?.length) renderChildren(action);
+        else if (action.remote) sendRemoteExecute(action, null);
+        else execute(action.run, action.label);
+      };
+      item.addEventListener('click', activate);
+      item.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          activate();
+        }
+      });
+
+      const remove = d.createElement('button');
+      remove.type = 'button';
+      remove.className = 'remove';
+      remove.textContent = '−';
+      remove.setAttribute('aria-label', `${action.label} 폴더에서 빼기`);
+      remove.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (action.remote) sendRemoteRemove(action);
+        else removeAction(action.id);
+      });
+      item.appendChild(remove);
+      grid.appendChild(item);
+    });
+
+    content.appendChild(grid);
+  }
+
+  function renderChildren(action) {
+    managing = false;
+    host.classList.remove('managing');
+    manageButton.hidden = true;
+    content.replaceChildren();
+
+    const back = d.createElement('button');
+    back.type = 'button';
+    back.className = 'back';
+    back.innerHTML = `<span>‹</span><strong>${escapeHTML(action.label)}</strong>`;
+    back.addEventListener('click', () => {
+      manageButton.hidden = false;
+      render();
+    });
+
+    const grid = d.createElement('div');
+    grid.className = 'grid';
+
+    action.children.forEach(child => {
+      const item = d.createElement('div');
+      item.className = 'item child';
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      item.setAttribute('aria-label', child.label);
+
+      const visual = d.createElement('div');
+      visual.className = 'visual';
+      visual.appendChild(iconVisual(child.label));
+      const label = d.createElement('div');
+      label.className = 'label';
+      label.textContent = child.label;
+      item.append(visual, label);
+
+      const activate = () => action.remote
+        ? sendRemoteExecute(action, child.index)
+        : execute(child.run, `${action.label} · ${child.label}`);
+      item.addEventListener('click', activate);
+      item.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          activate();
+        }
+      });
+      grid.appendChild(item);
+    });
+
+    content.append(back, grid);
+  }
+
+  function escapeHTML(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+
+  function sendRemoteExecute(action, childIndex) {
+    closePanel();
+    try {
+      action.source?.postMessage?.({ channel: CHANNEL, type: 'EXEC', id: action.remoteId, childIndex }, '*');
+    } catch (_) { toast(`${action.label} 실행 연결에 실패했어요`); }
+  }
+
+  function sendRemoteRemove(action) {
+    try { action.source?.postMessage?.({ channel: CHANNEL, type: 'REMOVE', id: action.remoteId }, '*'); }
+    catch (_) { toast('도구를 꺼내지 못했어요'); }
+  }
+
+  function syncRemoteActions(items, source) {
+    for (const [key, value] of [...remoteActions]) {
+      if (value.source === source) remoteActions.delete(key);
+    }
+    (Array.isArray(items) ? items : []).forEach(item => {
+      if (!item?.id) return;
+      const key = `remote:${item.id}`;
+      remoteActions.set(key, {
+        id: key,
+        remoteId: item.id,
+        remote: true,
+        source,
+        kind: item.kind === 'group' ? 'group' : 'single',
+        label: item.label || '도구',
+        visual: null,
+        children: (item.children || []).map((child, index) => ({
+          index: Number.isInteger(child?.index) ? child.index : index,
+          label: child?.label || `기능 ${index + 1}`,
+          visual: null,
+        })),
+      });
+    });
+    render();
+  }
+
+  function sendGeometryToFrameWorkers() {
+    if (!IS_OUTER || !launcher) return;
+    const lr = launcher.getBoundingClientRect();
+    const launcherRect = { left: lr.left, top: lr.top, right: lr.right, bottom: lr.bottom, width: lr.width, height: lr.height };
+    [...d.querySelectorAll('iframe')].forEach(frame => {
+      let src = '';
+      try { src = frame.src || ''; } catch (_) {}
+      if (!/https:\/\/frame\.pingpong\.ai\//i.test(src)) return;
+      const fr = frame.getBoundingClientRect();
+      const frameRect = { left: fr.left, top: fr.top, right: fr.right, bottom: fr.bottom, width: fr.width, height: fr.height };
+      try { frame.contentWindow?.postMessage({ channel: CHANNEL, type: 'GEOMETRY', launcher: launcherRect, frame: frameRect }, '*'); } catch (_) {}
+    });
+  }
+
+  function installMessaging() {
+    on(w, 'message', event => {
+      const data = event.data;
+      if (!data || data.channel !== CHANNEL) return;
+
+      if (IS_OUTER) {
+        if (event.origin !== 'https://frame.pingpong.ai') return;
+        if (data.type === 'SYNC') syncRemoteActions(data.items, event.source);
+        else if (data.type === 'TOAST') toast(data.message || '');
+        else if (data.type === 'DRAG_STATE') {
+          host?.classList.toggle('remote-drag', !!data.active);
+          host?.classList.toggle('drop-ready', !!data.active);
+          host?.classList.toggle('drop-hover', !!data.active && !!data.hovering);
+        } else if (data.type === 'HELLO') {
+          sendGeometryToFrameWorkers();
+        }
+        return;
+      }
+
+      if (IS_FRAME_WORKER) {
+        if (!/(^https:\/\/zeta-ai\.io$)|(^https:\/\/[^/]+\.zeta-ai\.io$)/i.test(event.origin)) return;
+        if (data.type === 'GEOMETRY') {
+          remoteGeometry = { launcher: data.launcher, frame: data.frame };
+        } else if (data.type === 'EXEC') {
+          const action = actions.get(String(data.id));
+          if (!action) { notifyOuter(); return; }
+          try {
+            if (action.kind === 'group' && Number.isInteger(data.childIndex)) {
+              const child = action.children?.[data.childIndex];
+              if (!child) throw new Error('하위 기능을 찾지 못했습니다.');
+              child.run();
+            } else if (action.kind === 'single') action.run();
+          } catch (error) {
+            console.error('[Zeta Floating Folder worker]', error);
+            postToOuter({ type: 'TOAST', message: '원본 버튼을 다시 찾지 못했어요' });
+          }
+        } else if (data.type === 'REMOVE') {
+          removeAction(String(data.id));
+        }
+      }
+    });
+
+    if (IS_FRAME_WORKER) {
+      postToOuter({ type: 'HELLO' });
+      w.setTimeout(notifyOuter, 120);
+    }
+  }
+
+  function viewport() {
+    const vv = w.visualViewport;
+    return {
+      left: vv?.offsetLeft || 0,
+      top: vv?.offsetTop || 0,
+      width: vv?.width || w.innerWidth || d.documentElement.clientWidth,
+      height: vv?.height || w.innerHeight || d.documentElement.clientHeight,
+    };
+  }
+
+  function readPosition() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
+      if (Number.isFinite(saved?.x) && Number.isFinite(saved?.y)) {
+        return { x: clamp(saved.x, 0, 1), y: clamp(saved.y, 0, 1) };
+      }
+    } catch (_) {}
+    return { x: 0.92, y: 0.72 };
+  }
+
+  let position = readPosition();
+
+  function placeLauncher() {
+    if (!launcher) return;
+    // Clean Cozy의 세 버튼은 right:8px / 44px 간격으로 배치된다.
+    // 최상단 줄정리 버튼(bottom:258px) 위에 같은 간격으로 네 번째 버튼을 둔다.
+    launcher.style.setProperty('left', 'auto', 'important');
+    launcher.style.setProperty('top', 'auto', 'important');
+    launcher.style.setProperty('right', '8px', 'important');
+    launcher.style.setProperty('bottom', '302px', 'important');
+    if (IS_OUTER) sendGeometryToFrameWorkers();
+  }
+
+  function placePanel() {
+    if (!open || !panel) return;
+    // 바텀시트는 런처 위치와 무관하게 화면 아래에 고정한다.
+    panel.style.setProperty('left', '50%', 'important');
+    panel.style.setProperty('right', 'auto', 'important');
+    panel.style.setProperty('top', 'auto', 'important');
+    panel.style.setProperty('bottom', '0', 'important');
+  }
+
+  function openPanel() {
+    open = true;
+    managing = false;
+    manageButton.hidden = false;
+    host.classList.add('open');
+    launcher.setAttribute('aria-expanded', 'true');
+    render();
+    requestAnimationFrame(placePanel);
+  }
+
+  function closePanel() {
+    open = false;
+    managing = false;
+    manageButton.hidden = false;
+    host?.classList.remove('open', 'managing');
+    launcher?.setAttribute('aria-expanded', 'false');
+  }
+
+  function toast(message) {
+    if (IS_FRAME_WORKER && !toastNode) {
+      postToOuter({ type: 'TOAST', message: String(message || '') });
+      return;
+    }
+    if (!toastNode) return;
+    clearTimeout(toastTimer);
+    toastNode.textContent = message;
+    toastNode.classList.add('show');
+    toastTimer = w.setTimeout(() => toastNode?.classList.remove('show'), 1800);
+  }
+
+  function createUI() {
+    d.getElementById(HOST_ID)?.remove();
+    host = d.createElement('div');
+    host.id = HOST_ID;
+    shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = `
+      <style>
+        :host{
+          all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;
+          font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+          --lav:#8f7cf5;--lav-deep:#7762e8;--lav-soft:#eeeaff;--ink:#373342;--muted:#8d8898;
+          --glass:rgba(250,248,255,.88);--card:rgba(255,255,255,.62);--line:rgba(107,91,157,.11);
+        }
+        *{box-sizing:border-box}button{font:inherit;-webkit-tap-highlight-color:transparent}
+        .launcher{
+          position:fixed;width:32px;height:32px;min-width:32px;min-height:32px;padding:0;
+          display:flex;align-items:center;justify-content:center;
+          border:1px solid #DDDFE0;border-radius:50%;
+          background:#FFFFFF;color:#45484C;
+          box-shadow:0 2px 8px #00000015;
+          pointer-events:auto;touch-action:auto;cursor:pointer;
+          transition:transform .14s ease,box-shadow .14s ease,background .14s ease;
+        }
+        .launcher:hover{background:#F1F2F4}.launcher:active{transform:scale(.93)}
+        .folder-svg{width:17px;height:17px;display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+        :host(.drop-ready) .launcher{box-shadow:0 0 0 3px rgba(126,106,156,.14),0 2px 8px #00000015}
+        :host(.drop-hover) .launcher{transform:scale(1.10);background:#F3EEFA;box-shadow:0 0 0 5px rgba(126,106,156,.18),0 3px 10px #00000018}
+        .scrim{position:fixed;inset:0;border:0;background:rgba(17,13,24,.14);backdrop-filter:blur(1px);opacity:0;pointer-events:none;transition:opacity .16s ease}
+        .panel{
+          position:fixed;left:50%;right:auto;top:auto;bottom:0;
+          width:min(100%,560px);max-width:100%;max-height:min(78dvh,620px);
+          overflow:hidden;display:flex;flex-direction:column;
+          border:1px solid #E4E5E6;border-bottom:0;border-radius:20px 20px 0 0;
+          background:#FFFFFF;color:#292B2D;
+          box-shadow:0 -10px 32px rgba(25,29,34,.14);
+          opacity:0;transform:translate(-50%,18px);pointer-events:none;
+          transition:opacity .18s ease,transform .18s ease;
+          padding-bottom:env(safe-area-inset-bottom);
+        }
+        .head{display:flex;align-items:center;gap:8px;padding:14px 14px 10px;border-bottom:1px solid var(--line);touch-action:none}
+        .head-icon{display:none}.titles{min-width:0;flex:1}.title{font-size:15px;font-weight:800;letter-spacing:-.02em;line-height:1.2}
+        .sub{margin-top:3px;font-size:9px;font-weight:600;color:var(--muted)}
+        .manage,.close,.back{border:0;cursor:pointer;color:inherit;background:rgba(110,94,153,.07)}
+        .manage{height:29px;padding:0 10px;border-radius:10px;font-size:10px;font-weight:800;color:#756b88}
+        .close{width:29px;height:29px;border-radius:10px;font-size:17px;color:#706a7a}
+        .content{min-height:0;overflow:auto;padding:13px 13px 15px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+        .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px 7px}
+        .item{
+          position:relative;min-width:0;min-height:82px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;
+          padding:7px 3px;border:0;border-radius:17px;background:transparent;cursor:pointer;outline:none;pointer-events:auto;
+          transition:transform .12s ease,background .12s ease;
+        }
+        .item:hover{background:rgba(255,255,255,.42)}.item:active{transform:scale(.95);background:rgba(143,124,245,.07)}
+        .item:focus-visible{box-shadow:0 0 0 3px rgba(143,124,245,.16)}
+        .visual{width:48px;height:48px;display:flex;align-items:center;justify-content:center;overflow:hidden;pointer-events:none}
+        .visual>*{max-width:46px!important;max-height:46px!important;flex:none!important}
+        .semantic-icon,.fallback-icon{
+          width:46px;height:46px;display:grid;place-items:center;border-radius:15px;
+          background:linear-gradient(145deg,rgba(255,255,255,.78),rgba(235,229,255,.92));
+          border:1px solid rgba(255,255,255,.88);box-shadow:0 5px 14px rgba(83,65,129,.10),inset 0 1px 0 rgba(255,255,255,.9);
+          color:var(--lav-deep);
+        }
+        .semantic-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+        .fallback-icon{font-size:20px}
+        .label{width:100%;min-height:26px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;text-align:center;font-size:10px;font-weight:720;line-height:1.25;color:#4d4858;letter-spacing:-.02em}
+        .remove{position:absolute;right:3px;top:2px;width:21px;height:21px;padding:0;display:none;place-items:center;border:2px solid #f8f5ff;border-radius:999px;background:#ff6473;color:#fff;font-size:14px;font-weight:900;line-height:1;box-shadow:0 3px 8px rgba(60,40,70,.17);pointer-events:auto;cursor:pointer}
+        :host(.managing) .item{opacity:.62;pointer-events:none}:host(.managing) .remove{display:grid;pointer-events:auto}
+        .back{width:100%;height:36px;margin:0 0 10px;padding:0 11px;border-radius:12px;display:flex;align-items:center;gap:7px;text-align:left;font-size:11px;color:#645b76}
+        .back span{font-size:21px;line-height:1;color:var(--lav-deep)}.back strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .empty{padding:31px 14px 28px;text-align:center;color:#938da0;font-size:11px;line-height:1.55}.empty strong{display:block;margin-bottom:5px;color:#5e5869;font-size:12px}
+        .toast{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));max-width:calc(100vw - 24px);padding:9px 13px;border:1px solid rgba(255,255,255,.15);border-radius:999px;background:rgba(45,39,57,.9);color:#fff;font-size:10px;font-weight:700;opacity:0;transform:translate(-50%,7px);transition:.16s ease;pointer-events:none;white-space:nowrap;backdrop-filter:blur(12px)}
+        .toast.show{opacity:1;transform:translate(-50%,0)}
+        :host(.open) .scrim{opacity:1;pointer-events:auto}:host(.open) .panel{opacity:1;transform:translate(-50%,0);pointer-events:auto}:host(.open) .launcher{opacity:1;pointer-events:none}
+        :host(.remote-drag) .launcher{pointer-events:none!important}
+        @media(prefers-color-scheme:dark){
+          :host{--ink:#f5f1fa;--muted:#a9a1b5;--glass:rgba(37,33,45,.9);--card:rgba(255,255,255,.05);--line:rgba(255,255,255,.08)}
+          .launcher{background:#FFFFFF;border-color:#DDDFE0;color:#45484C;box-shadow:0 2px 8px #00000015}
+          .panel{background:#FFFFFF;border-color:#E4E5E6;color:#292B2D;box-shadow:0 -10px 32px rgba(25,29,34,.14)}
+          .manage,.close,.back{background:rgba(255,255,255,.065);color:#d8d1e3}.sub{color:#a79fb0}.item:hover{background:rgba(255,255,255,.045)}
+          .semantic-icon,.fallback-icon{background:linear-gradient(145deg,rgba(255,255,255,.10),rgba(143,124,245,.13));border-color:rgba(255,255,255,.09);color:#b9aaff;box-shadow:0 5px 16px rgba(0,0,0,.13),inset 0 1px 0 rgba(255,255,255,.07)}
+          .label{color:#eee9f3}.remove{border-color:#292530}.empty{color:#9e96a6}.empty strong{color:#d8d1df}
+        }
+        @media(max-width:360px){.panel{width:100%}.grid{gap:7px 5px}.item{min-height:78px}}
+        @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+      </style>
+
+      <button class="scrim" type="button" aria-label="폴더 닫기"></button>
+      <section class="panel" role="dialog" aria-label="플로팅 도구 폴더">
+        <header class="head">
+          <div class="head-icon">📁</div>
+          <div class="titles"><div class="title">도구</div><div class="sub">드래그해서 정리</div></div>
+          <button class="manage" type="button">정리</button>
+          <button class="close" type="button" aria-label="닫기">×</button>
+        </header>
+        <div class="content"></div>
+      </section>
+      <button class="launcher" type="button" aria-label="도구 폴더 열기" aria-expanded="false">
+        <svg class="folder-svg" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7.5Z"/>
+          <path d="M3.5 10h17"/>
+        </svg>
+      </button>
+      <div class="toast" role="status" aria-live="polite"></div>
+    `;
+
+    (d.documentElement || d.body).appendChild(host);
+    launcher = shadow.querySelector('.launcher');
+    panel = shadow.querySelector('.panel');
+    content = shadow.querySelector('.content');
+    manageButton = shadow.querySelector('.manage');
+    toastNode = shadow.querySelector('.toast');
+
+    shadow.querySelector('.scrim').addEventListener('click', closePanel);
+    shadow.querySelector('.close').addEventListener('click', closePanel);
+    manageButton.addEventListener('click', () => {
+      managing = !managing;
+      render();
+    });
+
+    // 폴더 버튼 자체는 Clean Cozy의 기존 세 버튼처럼 고정한다.
+    // 다른 플로팅 도구를 이 버튼 위에 드롭하는 기능만 유지한다.
+    launcher.addEventListener('click', event => {
+      if (suppressLauncherClick) {
+        suppressLauncherClick = false;
+        event.preventDefault();
+        return;
+      }
+      open ? closePanel() : openPanel();
+    });
+
+    placeLauncher();
+    render();
+  }
+
+  function startObserver() {
+    observer = new MutationObserver(() => {
+      clearTimeout(scanTimer);
+      scanTimer = w.setTimeout(() => {
+        refreshRoots();
+        restoreSavedEntries();
+      }, 100);
+    });
+    observer.observe(d.documentElement, { childList: true, subtree: true });
+    restoreInterval = w.setInterval(restoreSavedEntries, 2500);
+  }
+
+  function destroy() {
+    clearTimeout(scanTimer);
+    clearTimeout(toastTimer);
+    clearInterval(restoreInterval);
+    clearInterval(geometryInterval);
+    observer?.disconnect();
+    disposers.splice(0).forEach(fn => { try { fn(); } catch (_) {} });
+    restoreAllHidden();
+    host?.remove();
+    host = shadow = launcher = panel = content = manageButton = toastNode = null;
+    actions.clear();
+    try { delete w[INSTANCE]; } catch (_) { w[INSTANCE] = undefined; }
+  }
+
+  function start() {
+    loadSaved();
+    installMessaging();
+
+    if (IS_OUTER) {
+      createUI();
+      geometryInterval = w.setInterval(sendGeometryToFrameWorkers, 700);
+      on(w, 'resize', () => { placeLauncher(); requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+      on(w.visualViewport, 'resize', () => { placeLauncher(); requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+      on(w.visualViewport, 'scroll', () => { placeLauncher(); requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+    }
+
+    // outer 자체 플로팅 도구와 iframe 내부 플로팅 도구 모두 감지한다.
+    refreshRoots();
+    restoreSavedEntries();
+    startObserver();
+    notifyOuter();
+  }
+
+  w[INSTANCE] = {
+    destroy,
+    rescan: restoreSavedEntries,
+    get items() { return [...savedEntries.values()]; },
+  };
+
+  if (d.documentElement) start();
+  else d.addEventListener('readystatechange', () => {
+    if (d.documentElement && !host) start();
+  }, { once: true });
+})();
+
+/* ===== Integrated: Review Quickbar Floating Adapter ===== */
+(() => {
+  'use strict';
+
+  const w = window;
+  const d = document;
+
+  const IS_FRAME = location.hostname === 'frame.pingpong.ai';
+  const TOP_RE = /^https:\/\/([a-z0-9-]+\.)*zeta-ai\.io$/i;
+  const FRAME_RE = /^https:\/\/([a-z0-9-]+\.)*pingpong\.ai$/i;
+
+  const INSTANCE_KEY = '__ZETA_REVIEW_QUICKBAR_FLOAT_V2__';
+  const MARK_ATTR = 'data-zeta-review-tabbar-drag';
+  const KEY_POS = 'zeta_review_quickbar_float_pos_v2';
+  const STORE_CHANNEL = 'zeta-review-quickbar-store-v2';
+  const ACCENT_CHANNEL = 'zeta-review-quickbar-accent-v2';
+
+  const LABELS = ['검토', '새답변', '추천', '무응답', '퀵', '이력', '로어', '설정', '×', 'X', 'x'];
+  const CORE_LABELS = ['검토', '새답변', '추천', '무응답'];
+
+  try { w[INSTANCE_KEY]?.stop?.(); } catch (_) {}
+
+  let stopped = false;
+  let barEl = null;
+  let observer = null;
+  let refreshTimer = 0;
+  let accentTimer = 0;
+  let frameAccent = null;
+  let pos = null;
+  let userMoved = false;
+  let drag = null;
+  let suppressNextClick = false;
+
+  const cleanText = value => String(value || '').replace(/\s+/g, ' ').trim();
+  const clamp = (v, min, max) => Math.min(Math.max(v, min), Math.max(min, max));
+
+  function visible(el) {
+    if (!(el instanceof Element) || !el.isConnected) return false;
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+  }
+
+  // ------------------------------
+  // outer <-> iframe position store
+  // ------------------------------
+  function parentOrigin() {
+    if (w.top === w) return location.origin;
+    try {
+      const ao = location.ancestorOrigins?.[0];
+      if (ao && TOP_RE.test(ao)) return ao;
+    } catch (_) {}
+    try {
+      const ref = new URL(d.referrer).origin;
+      if (TOP_RE.test(ref)) return ref;
+    } catch (_) {}
+    return '';
+  }
+
+  const pendingStore = new Map();
+  let storeSeq = 0;
+
+  function installStoreBridge() {
+    if (w.top === w) {
+      w.addEventListener('message', event => {
+        if (!FRAME_RE.test(event.origin)) return;
+        const data = event.data;
+        if (!data || data.channel !== STORE_CHANNEL || !event.source) return;
+        if (data.key !== KEY_POS) return;
+
+        let value = null;
+        try {
+          if (data.op === 'get') value = localStorage.getItem(KEY_POS);
+          if (data.op === 'set') {
+            localStorage.setItem(KEY_POS, String(data.value ?? ''));
+            value = String(data.value ?? '');
+          }
+        } catch (_) {}
+
+        try {
+          event.source.postMessage({
+            channel: STORE_CHANNEL,
+            type: 'reply',
+            id: data.id,
+            value
+          }, event.origin);
+        } catch (_) {}
+      });
+      return;
+    }
+
+    w.addEventListener('message', event => {
+      if (!TOP_RE.test(event.origin)) return;
+      const data = event.data;
+      if (!data || data.channel !== STORE_CHANNEL || data.type !== 'reply') return;
+      const done = pendingStore.get(data.id);
+      if (!done) return;
+      pendingStore.delete(data.id);
+      done(data.value);
+    });
+  }
+
+  function storeAsk(op, value) {
+    if (w.top === w) {
+      try {
+        if (op === 'get') return Promise.resolve(localStorage.getItem(KEY_POS));
+        localStorage.setItem(KEY_POS, String(value ?? ''));
+        return Promise.resolve(String(value ?? ''));
+      } catch (_) {
+        return Promise.resolve(null);
+      }
+    }
+
+    const origin = parentOrigin();
+    if (!origin) return Promise.resolve(undefined);
+
+    return new Promise(resolve => {
+      const id = `zrq_${++storeSeq}_${Date.now()}`;
+      const timer = setTimeout(() => {
+        pendingStore.delete(id);
+        resolve(undefined);
+      }, 1500);
+
+      pendingStore.set(id, result => {
+        clearTimeout(timer);
+        resolve(result);
+      });
+
+      try {
+        w.parent.postMessage({
+          channel: STORE_CHANNEL,
+          id,
+          op,
+          key: KEY_POS,
+          value
+        }, origin);
+      } catch (_) {
+        clearTimeout(timer);
+        pendingStore.delete(id);
+        resolve(undefined);
+      }
+    });
+  }
+
+  function parsePos(raw) {
+    try {
+      const v = JSON.parse(raw || 'null');
+      if (Number.isFinite(v?.x) && Number.isFinite(v?.y)) return { x: v.x, y: v.y };
+    } catch (_) {}
+    return null;
+  }
+
+  async function loadPos() {
+    let local = null;
+    try { local = parsePos(localStorage.getItem(KEY_POS)); } catch (_) {}
+    if (local) {
+      pos = local;
+      return;
+    }
+
+    const fromTop = parsePos(await storeAsk('get'));
+    if (fromTop && !userMoved) pos = fromTop;
+  }
+
+  function savePos() {
+    if (!pos) return;
+    const raw = JSON.stringify({
+      x: Math.round(pos.x),
+      y: Math.round(pos.y)
+    });
+    try { localStorage.setItem(KEY_POS, raw); } catch (_) {}
+    storeAsk('set', raw);
+  }
+
+  // ------------------------------
+  // user bubble accent
+  // ------------------------------
+  function currentUserBubble() {
+    const compat =
+      d.querySelector('[data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]') ||
+      d.querySelector('[data-sentry-component="RightTextContent"]');
+
+    if (compat) return compat;
+
+    const log = d.querySelector('[role="log"][aria-label="Chat messages"]');
+    if (!log) return null;
+
+    const rows = [...log.querySelectorAll('div')].filter(el =>
+      el.classList?.contains('ml-auto') &&
+      el.classList?.contains('flex') &&
+      el.classList?.contains('flex-row')
+    );
+
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      const bubbles = [...row.querySelectorAll('div')].filter(el =>
+        el.classList?.contains('w-fit') &&
+        el.classList?.contains('flex-col')
+      );
+      if (bubbles[0]) return bubbles[0];
+    }
+
+    return null;
+  }
+
+  function bubbleAccentPayload() {
+    const bubble = currentUserBubble();
+    if (!bubble) return null;
+    const cs = getComputedStyle(bubble);
+    const bw = parseFloat(cs.borderTopWidth || '0');
+    return {
+      border: bw >= 1 ? cs.borderTopColor : null,
+      bg: cs.backgroundColor || null
+    };
+  }
+
+  function sendFrameAccent() {
+    if (!IS_FRAME || w.top === w) return;
+    const payload = bubbleAccentPayload();
+    if (!payload) return;
+
+    const origin = parentOrigin();
+    if (!origin) return;
+
+    try {
+      w.parent.postMessage({
+        channel: ACCENT_CHANNEL,
+        ...payload
+      }, origin);
+    } catch (_) {}
+  }
+
+  function installAccentBridge() {
+    if (IS_FRAME) {
+      sendFrameAccent();
+      accentTimer = w.setInterval(sendFrameAccent, 1200);
+      return;
+    }
+
+    w.addEventListener('message', event => {
+      if (!FRAME_RE.test(event.origin)) return;
+      const data = event.data;
+      if (!data || data.channel !== ACCENT_CHANNEL) return;
+
+      const value = parseColor(data.border) || parseColor(data.bg);
+      if (value && value !== frameAccent) {
+        frameAccent = value;
+        if (barEl?.isConnected) applyStyle(barEl, true);
+      }
+    });
+  }
+
+  function parseColor(raw) {
+    if (!raw) return null;
+    const value = String(raw).trim();
+
+    if (/^#[0-9a-f]{3,8}$/i.test(value)) {
+      if (value.length === 4) {
+        return '#' + [...value.slice(1)].map(c => c + c).join('');
+      }
+      return value.slice(0, 7);
+    }
+
+    const m = value.match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+    if (!m) return null;
+
+    const r = +m[1], g = +m[2], b = +m[3];
+    if (Math.max(r, g, b) - Math.min(r, g, b) < 10) return null;
+
+    return '#' + [r, g, b]
+      .map(v => clamp(v, 0, 255).toString(16).padStart(2, '0'))
+      .join('');
+  }
+
+  function accentFromCurrentDocument() {
+    const bubble = bubbleAccentPayload();
+    return parseColor(bubble?.border)
+      || parseColor(bubble?.bg)
+      || parseColor(getComputedStyle(d.documentElement).getPropertyValue('--dialogue-hl'))
+      || parseColor(d.querySelector('[data-testid="chat-send-button"]')
+        ? getComputedStyle(d.querySelector('[data-testid="chat-send-button"]')).backgroundColor
+        : null)
+      || null;
+  }
+
+  function getAccent() {
+    return frameAccent || accentFromCurrentDocument() || '#9B87D3';
+  }
+
+  // ------------------------------
+  // quickbar discovery
+  // ------------------------------
+  function barButtons(container) {
+    return [...container.querySelectorAll('button,[role="button"],div,span')]
+      .filter(el => {
+        const text = cleanText(el.textContent);
+        return LABELS.includes(text) && el.children.length === 0;
+      });
+  }
+
+  function findBar() {
+    const byId = d.getElementById('zk_review_quickbar');
+    if (byId && visible(byId)) return byId;
+
+    const all = [...d.querySelectorAll('button,[role="button"],div,span')];
+    const core = CORE_LABELS
+      .map(label => all.find(el => visible(el) && cleanText(el.textContent) === label))
+      .filter(Boolean);
+
+    if (core.length < 3) return null;
+
+    let container = core[0].parentElement;
+    for (let hops = 0; container && hops < 6; hops++, container = container.parentElement) {
+      if (container === d.body || container === d.documentElement) break;
+      if (!core.every(el => container.contains(el))) continue;
+
+      const r = container.getBoundingClientRect();
+      if (r.width <= Math.min(1100, w.innerWidth) && r.height <= 420) return container;
+    }
+
+    return null;
+  }
+
+  // ------------------------------
+  // placement / styling
+  // ------------------------------
+  function orientation() {
+    const y = pos?.y ?? 0;
+    const h = w.innerHeight || d.documentElement.clientHeight || 1;
+    return y < h * 0.22 || y > h * 0.78 ? 'horizontal' : 'vertical';
+  }
+
+  function ensurePos(el) {
+    if (pos) return;
+    const r = el.getBoundingClientRect();
+    pos = {
+      x: Number.isFinite(r.left) ? r.left : Math.max(12, w.innerWidth - 90),
+      y: Number.isFinite(r.top) ? r.top : Math.max(12, w.innerHeight - 320)
+    };
+  }
+
+  function clampPos(el) {
+    ensurePos(el);
+    const r = el.getBoundingClientRect();
+    const maxX = Math.max(4, w.innerWidth - Math.min(Math.max(r.width, 48), w.innerWidth) - 4);
+    const maxY = Math.max(4, w.innerHeight - Math.min(Math.max(r.height, 40), w.innerHeight) - 4);
+    pos.x = clamp(pos.x, 4, maxX);
+    pos.y = clamp(pos.y, 4, maxY);
+  }
+
+  function placeBar(el) {
+    ensurePos(el);
+    clampPos(el);
+
+    const horizontal = orientation() === 'horizontal';
+    const set = (k, v) => el.style.setProperty(k, v, 'important');
+
+    set('position', 'fixed');
+    set('left', `${Math.round(pos.x)}px`);
+    set('top', `${Math.round(pos.y)}px`);
+    set('right', 'auto');
+    set('bottom', 'auto');
+    set('transform', 'none');
+    set('display', 'flex');
+    set('flex-direction', horizontal ? 'row' : 'column');
+    set('flex-wrap', 'nowrap');
+    set('gap', '3px');
+    set('width', 'auto');
+    set('max-width', 'calc(100vw - 8px)');
+    set('z-index', '9999');
+    set('transition', 'none');
+  }
+
+  function paintBar(el) {
+    const accent = getAccent();
+    const horizontal = orientation() === 'horizontal';
+
+    el.style.setProperty('background', 'rgba(255,255,255,.96)', 'important');
+    el.style.setProperty('border', `1px solid ${accent}40`, 'important');
+    el.style.setProperty('border-radius', '14px', 'important');
+    el.style.setProperty('padding', '6px', 'important');
+    el.style.setProperty('box-shadow', '0 4px 16px rgba(0,0,0,.10)', 'important');
+    el.style.setProperty('backdrop-filter', 'blur(12px)', 'important');
+    el.style.setProperty('-webkit-backdrop-filter', 'blur(12px)', 'important');
+
+    for (const button of barButtons(el)) {
+      const text = cleanText(button.textContent);
+      const active = CORE_LABELS.includes(text);
+
+      button.style.setProperty('background', active ? `${accent}1F` : '#F2F2F7', 'important');
+      button.style.setProperty('color', active ? accent : '#8E8E93', 'important');
+      button.style.setProperty('border', `1px solid ${active ? accent + '50' : '#E5E5EA'}`, 'important');
+      button.style.setProperty('border-radius', '7px', 'important');
+      button.style.setProperty('padding', horizontal ? '2px 0' : '4px 0', 'important');
+      button.style.setProperty('font-size', horizontal ? '9px' : '10px', 'important');
+      button.style.setProperty('font-weight', '600', 'important');
+      button.style.setProperty('box-shadow', 'none', 'important');
+      button.style.setProperty('text-align', 'center', 'important');
+      button.style.setProperty('white-space', 'nowrap', 'important');
+      button.style.setProperty('width', horizontal ? '34px' : '48px', 'important');
+      button.style.setProperty('min-width', horizontal ? '34px' : '48px', 'important');
+      button.style.setProperty('max-width', horizontal ? '34px' : '48px', 'important');
+      button.style.setProperty('box-sizing', 'border-box', 'important');
+    }
+  }
+
+  // ------------------------------
+  // drag
+  // ------------------------------
+  function installDrag(el) {
+    if (el.dataset.zetaReviewFloatDrag === '1') return;
+    el.dataset.zetaReviewFloatDrag = '1';
+
+    const onDown = event => {
+      if (event.pointerType !== 'touch' && event.button !== 0) return;
+
+      ensurePos(el);
+      drag = {
+        id: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        baseX: pos.x,
+        baseY: pos.y,
+        moved: false
+      };
+
+      try { el.setPointerCapture?.(event.pointerId); } catch (_) {}
+    };
+
+    const onMove = event => {
+      if (!drag || drag.id !== event.pointerId) return;
+
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+
+      if (!drag.moved && Math.hypot(dx, dy) > 6) drag.moved = true;
+      if (!drag.moved) return;
+
+      pos = { x: drag.baseX + dx, y: drag.baseY + dy };
+      clampPos(el);
+      placeBar(el);
+
+      if (event.cancelable) event.preventDefault();
+    };
+
+    const finish = event => {
+      if (!drag || drag.id !== event.pointerId) return;
+
+      const moved = drag.moved;
+      drag = null;
+      try { el.releasePointerCapture?.(event.pointerId); } catch (_) {}
+
+      if (!moved) return;
+
+      userMoved = true;
+      suppressNextClick = true;
+      clampPos(el);
+      placeBar(el);
+      paintBar(el);
+      savePos();
+
+      if (event.cancelable) event.preventDefault();
+    };
+
+    const suppressClick = event => {
+      if (!suppressNextClick) return;
+      suppressNextClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    el.addEventListener('pointerdown', onDown, true);
+    el.addEventListener('pointermove', onMove, true);
+    el.addEventListener('pointerup', finish, true);
+    el.addEventListener('pointercancel', finish, true);
+    el.addEventListener('click', suppressClick, true);
+  }
+
+  function applyStyle(el, force = false) {
+    if (!el) return;
+
+    barEl = el;
+
+    // Important for the universal floating-folder script:
+    // treat this whole quickbar as one draggable toolbar.
+    el.setAttribute(MARK_ATTR, 'true');
+
+    installDrag(el);
+    placeBar(el);
+    paintBar(el);
+  }
+
+  // ------------------------------
+  // lifecycle
+  // ------------------------------
+  function discover() {
+    if (stopped) return;
+
+    const found = findBar();
+    if (!found) {
+      barEl = null;
+      return;
+    }
+
+    if (barEl !== found) {
+      barEl = found;
+      applyStyle(found, true);
+    } else {
+      applyStyle(found, false);
+    }
+  }
+
+  function queueDiscover() {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(discover, 80);
+  }
+
+  async function start() {
+    installStoreBridge();
+    installAccentBridge();
+    await loadPos();
+
+    discover();
+
+    observer = new MutationObserver(queueDiscover);
+    observer.observe(d.documentElement, { childList: true, subtree: true });
+
+    w.addEventListener('resize', () => {
+      if (!barEl?.isConnected) return;
+      clampPos(barEl);
+      applyStyle(barEl, true);
+    }, { passive: true });
+
+    // Theme/bubble color may change without recreating the bar.
+    w.setInterval(() => {
+      if (barEl?.isConnected && visible(barEl)) paintBar(barEl);
+    }, 1200);
+  }
+
+  function stop() {
+    stopped = true;
+    clearTimeout(refreshTimer);
+    clearInterval(accentTimer);
+    observer?.disconnect();
+    pendingStore.clear();
+
+    if (barEl?.isConnected) {
+      barEl.removeAttribute(MARK_ATTR);
+      delete barEl.dataset.zetaReviewFloatDrag;
+    }
+
+    try { delete w[INSTANCE_KEY]; } catch (_) { w[INSTANCE_KEY] = undefined; }
+  }
+
+  w[INSTANCE_KEY] = { stop, rescan: discover };
+
+  if (d.documentElement) start();
+  else d.addEventListener('DOMContentLoaded', start, { once: true });
 })();
