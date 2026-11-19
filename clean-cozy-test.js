@@ -3665,9 +3665,8 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   const STORE_KEY = 'zeta-universal-floating-folder-items-v1';
   const POS_KEY = 'zeta-universal-floating-folder-position-v1';
   const HIDDEN_ATTR = 'data-zff-managed-v1';
-  const VERSION = '1.4.2-memory-reset-once';
+  const VERSION = '1.4.2-memory-patch-bridge';
   const CHANNEL = 'zeta-floating-folder-v11';
-  const MEMORY_RESET_KEY = 'zeta-universal-floating-folder-memory-reset-v71';
   const IS_OUTER = /(^|\.)zeta-ai\.io$/i.test(location.hostname) && w.top === w;
   const IS_FRAME_WORKER = location.hostname === 'frame.pingpong.ai';
   const remoteActions = new Map();
@@ -4154,35 +4153,12 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     notifyOuter();
   }
 
-  function isLegacyMemoryPatchEntry(row) {
-    if (!row || typeof row !== 'object') return false;
-    let text = '';
-    try { text = JSON.stringify(row); } catch (_) {}
-    return /(?:zk-memory-fab|기억\s*패치|memory[-_ ]?patch)/i.test(text);
-  }
-
   function loadSaved() {
     let rows = [];
     try {
       const parsed = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
       if (Array.isArray(parsed)) rows = parsed;
     } catch (_) {}
-
-    // v71 one-time migration: v69/v70 may have persisted a memory-patch entry
-    // whose descriptor was captured before the compatibility fix. That stale entry
-    // makes the FAB disappear immediately on startup, so remove ONLY that old entry
-    // once. A memory patch dragged into the folder again after this migration is kept.
-    try {
-      if (localStorage.getItem(MEMORY_RESET_KEY) !== '1') {
-        const filtered = rows.filter(row => !isLegacyMemoryPatchEntry(row));
-        if (filtered.length !== rows.length) {
-          rows = filtered;
-          localStorage.setItem(STORE_KEY, JSON.stringify(rows));
-        }
-        localStorage.setItem(MEMORY_RESET_KEY, '1');
-      }
-    } catch (_) {}
-
     rows.forEach(row => {
       if (row?.id && (row.kind === 'single' || row.kind === 'group')) savedEntries.set(String(row.id), row);
     });
@@ -4196,11 +4172,9 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     return `group:${hashString(children.map(item => descriptorKey(item.desc)).join('|'))}`;
   }
 
-  function memoryPatchRootFor(element) {
-    if (!(element instanceof HTMLElement)) return null;
-    if (element.id === 'zk-memory-fab') return element;
-    const inside = element.closest?.('#zk-memory-fab');
-    if (inside instanceof HTMLElement) return inside;
+  function isMemoryPatchLauncher(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.id === 'zk-memory-fab') return true;
     const marker = [
       element.id,
       element.getAttribute('aria-label'),
@@ -4209,15 +4183,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       element.getAttribute('data-action'),
       element.textContent,
     ].filter(Boolean).join(' ');
-    if (/(?:기억\s*패치|memory[-_ ]?patch)/i.test(marker)) {
-      const live = d.querySelector('#zk-memory-fab');
-      return live instanceof HTMLElement ? live : element;
-    }
-    return null;
-  }
-
-  function isMemoryPatchLauncher(element) {
-    return memoryPatchRootFor(element) instanceof HTMLElement;
+    return /(?:기억\s*패치|memory[-_ ]?patch)/i.test(marker);
   }
 
   function isPointerTapLauncher(element) {
@@ -4231,74 +4197,153 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     return compact && draggableStyle && positioned;
   }
 
-  function pointerTap(element, pointerType = 'mouse') {
+  function pointerTap(element) {
     if (!(element instanceof HTMLElement)) throw new Error('원본 도구를 찾지 못했습니다.');
     const rect = element.getBoundingClientRect();
-    const x = rect.left + Math.max(1, rect.width) / 2;
-    const y = rect.top + Math.max(1, rect.height) / 2;
-    const pointerId = pointerType === 'touch' ? 9192 : 9191;
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const pointerId = 9191;
     const base = {
       bubbles: true, cancelable: true, composed: true,
-      pointerId, pointerType, isPrimary: true,
+      pointerId, pointerType: 'mouse', isPrimary: true,
       button: 0, clientX: x, clientY: y,
     };
-    if (typeof PointerEvent === 'function') {
-      element.dispatchEvent(new PointerEvent('pointerdown', { ...base, buttons: 1 }));
-      element.dispatchEvent(new PointerEvent('pointerup', { ...base, buttons: 0 }));
-    } else {
-      element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 1, clientX: x, clientY: y }));
-      element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 0, clientX: x, clientY: y }));
-    }
-  }
-
-  function activateMemoryPatch(element) {
-    const root = memoryPatchRootFor(element) || d.querySelector('#zk-memory-fab');
-    if (!(root instanceof HTMLElement)) throw new Error('기억 패치 원본 버튼을 찾지 못했습니다.');
-    const trigger = root.matches?.('button,[role="button"],a')
-      ? root
-      : (root.querySelector?.('button,[role="button"],a') || element || root);
-
-    // 폴더가 원본을 숨긴 상태여도 일부 런처는 자기 visibility / hit-test 상태를
-    // 확인하며 패널을 연다. 실행하는 아주 짧은 순간만 숨김 속성을 풀고 곧바로 복구한다.
-    const hidden = [];
-    for (const node of [root, trigger]) {
-      if (!(node instanceof HTMLElement) || hidden.some(x => x.node === node)) continue;
-      hidden.push({ node, had: node.hasAttribute(HIDDEN_ATTR) });
-      if (node.hasAttribute(HIDDEN_ATTR)) node.removeAttribute(HIDDEN_ATTR);
-    }
-
-    try {
-      // iOS/Safari 계열 드래그형 FAB와 일반 click형 구현을 모두 커버한다.
-      pointerTap(trigger, 'touch');
-      pointerTap(trigger, 'mouse');
-      trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles:true, cancelable:true, view:w, button:0, buttons:1 }));
-      trigger.dispatchEvent(new MouseEvent('mouseup', { bubbles:true, cancelable:true, view:w, button:0, buttons:0 }));
-      trigger.click?.();
-      if (trigger !== root) root.click?.();
-    } finally {
-      // 패널 마운트가 동기/마이크로태스크로 끝난 뒤 원래 FAB만 다시 숨긴다.
-      w.setTimeout(() => {
-        hidden.forEach(({ node, had }) => {
-          if (had && node.isConnected) node.setAttribute(HIDDEN_ATTR, '1');
-        });
-      }, 120);
-    }
+    const down = typeof PointerEvent === 'function'
+      ? new PointerEvent('pointerdown', { ...base, buttons: 1 })
+      : new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 1, clientX: x, clientY: y });
+    const up = typeof PointerEvent === 'function'
+      ? new PointerEvent('pointerup', { ...base, buttons: 0 })
+      : new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: w, button: 0, buttons: 0, clientX: x, clientY: y });
+    element.dispatchEvent(down);
+    element.dispatchEvent(up);
   }
 
   function activateOriginalElement(element) {
     if (!(element instanceof HTMLElement)) throw new Error('원본 도구를 찾지 못했습니다.');
-    if (isMemoryPatchLauncher(element)) activateMemoryPatch(element);
-    else if (isPointerTapLauncher(element)) pointerTap(element);
+    if (isPointerTapLauncher(element)) pointerTap(element);
     else element.click();
+  }
+
+  function memoryPatchOpenSignal(element, baseline) {
+    if (!(element instanceof HTMLElement) || !element.isConnected) return false;
+    const expanded = element.getAttribute('aria-expanded');
+    if (expanded === 'true') return true;
+
+    const rect = element.getBoundingClientRect();
+    if (baseline && (
+      rect.width > baseline.width + 18 ||
+      rect.height > baseline.height + 18
+    )) return true;
+
+    // Some ZETAKIT tools expand by mounting a small panel under/around the FAB.
+    for (const node of element.querySelectorAll('*')) {
+      if (!(node instanceof HTMLElement)) continue;
+      const r = node.getBoundingClientRect();
+      if (r.width < 40 || r.height < 28) continue;
+      const s = getComputedStyle(node);
+      if (s.display === 'none' || s.visibility === 'hidden') continue;
+      if (s.position === 'fixed' || s.position === 'absolute' || node.getAttribute('role') === 'dialog') return true;
+    }
+
+    // Portal/sibling fallback: only inspect visible nodes whose own id/class/aria
+    // explicitly identifies them as a memory-patch UI. This stays DOM-only.
+    const root = element.getRootNode?.() || d;
+    const scope = root instanceof Document || root instanceof ShadowRoot ? root : d;
+    const nodes = scope.querySelectorAll?.(
+      '[id*="memory" i],[class*="memory" i],[aria-label*="기억" i],[title*="기억" i]'
+    ) || [];
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement) || node === element || element.contains(node)) continue;
+      const marker = [
+        node.id,
+        typeof node.className === 'string' ? node.className : '',
+        node.getAttribute('aria-label'),
+        node.getAttribute('title'),
+        node.textContent
+      ].filter(Boolean).join(' ');
+      if (!/(?:기억|memory)/i.test(marker)) continue;
+      const r = node.getBoundingClientRect();
+      const s = getComputedStyle(node);
+      if (r.width >= 40 && r.height >= 28 && s.display !== 'none' && s.visibility !== 'hidden') return true;
+    }
+    return false;
+  }
+
+  function runMemoryPatchFromFolder(current, shell) {
+    // Important: the normal ZETAKIT -> Memory Patch click path is untouched.
+    // This bridge runs ONLY after the user has already enrolled the FAB into our folder.
+    if (!(current instanceof HTMLElement)) throw new Error('기억 패치 원본을 찾지 못했습니다.');
+
+    if (shell instanceof HTMLElement) restoreElement(shell);
+    if (current !== shell) restoreElement(current);
+
+    const baselineRect = current.getBoundingClientRect();
+    const baseline = { width: baselineRect.width, height: baselineRect.height };
+    let sawOpen = false;
+    let fallbackTried = false;
+    let finished = false;
+
+    const rehide = () => {
+      if (finished) return;
+      finished = true;
+      if (shell instanceof HTMLElement && shell.isConnected) hideElement(shell);
+      else if (current.isConnected) hideElement(current);
+    };
+
+    // First use the browser's normal HTMLElement.click(). This is the closest
+    // match to the original FAB click while it is restored and visible.
+    try { current.click(); }
+    catch (_) {
+      current.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, composed: true, view: w
+      }));
+    }
+
+    let checks = 0;
+    const timer = w.setInterval(() => {
+      checks += 1;
+      if (!current.isConnected) {
+        w.clearInterval(timer);
+        finished = true;
+        return;
+      }
+
+      const openNow = memoryPatchOpenSignal(current, baseline);
+      if (openNow) sawOpen = true;
+
+      // If click did nothing, try the drag-style pointer tap once while the
+      // original FAB is still restored. Never send both immediately, avoiding
+      // an accidental open->close double toggle.
+      if (!sawOpen && !fallbackTried && checks === 4) {
+        fallbackTried = true;
+        try { pointerTap(current); } catch (_) {}
+      }
+
+      // Once we have observed an opened state, wait for it to close before
+      // hiding the original FAB again. This prevents a descendant popup from
+      // inheriting filter:opacity(0).
+      if (sawOpen && !openNow && checks > 5) {
+        w.clearInterval(timer);
+        rehide();
+        return;
+      }
+
+      // Failed to open: restore the enrolled hidden state, but do not touch
+      // ZETAKIT's creation/launcher flow.
+      if (!sawOpen && checks >= 14) {
+        w.clearInterval(timer);
+        rehide();
+      }
+    }, 120);
   }
 
   function buildSingleAction(entry, element, suppliedShell = null) {
     const visual = visualTemplateFrom(element);
     // 기억 패치는 FAB 주변 래퍼 안에 메뉴/패널을 함께 마운트할 수 있다.
-    // 래퍼 전체를 숨기면 실행은 되어도 열린 메뉴까지 filter:opacity(0)을 상속받아
-    // 보이지 않을 수 있으므로, 기억 패치는 버튼 자체만 숨긴다.
-    const shell = isMemoryPatchLauncher(element)
-      ? (memoryPatchRootFor(element) || element)
+    // 래퍼 전체를 숨기면 열린 메뉴까지 같이 투명해질 수 있으므로 FAB 자체만 관리한다.
+    const memoryPatch = isMemoryPatchLauncher(element);
+    const shell = memoryPatch
+      ? element
       : (suppliedShell instanceof HTMLElement
           ? suppliedShell
           : (entry.hideDesc ? resolveDescriptor(entry.hideDesc) : null) || element);
@@ -4313,7 +4358,8 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       run() {
         const current = element?.isConnected ? element : resolveDescriptor(entry.desc);
         if (!(current instanceof HTMLElement)) throw new Error('원본 도구를 찾지 못했습니다.');
-        activateOriginalElement(current);
+        if (isMemoryPatchLauncher(current)) runMemoryPatchFromFolder(current, shell);
+        else activateOriginalElement(current);
       }
     };
     hideElement(shell);
