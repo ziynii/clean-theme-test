@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      83.0-integrated
+// @version      84.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -297,16 +297,21 @@ function updateMobPersonAvatar(body){
  const norm=v=>String(v||'').replace(/\s+/g,' ').trim();
  const isMob=Boolean(speaker&&main&&norm(speaker)!==norm(main));
  let fake=body.querySelector(':scope > .cc-mob-person-avatar');
- const nativeAvatar=[...body.children].find(el=>el instanceof HTMLElement&&el.tagName==='BUTTON'&&el.querySelector('img'))||null;
+ const nativeAvatar=[...body.children].find(el=>el instanceof HTMLElement&&el.tagName==='BUTTON')||null;
 
  if(!isMob){
   fake?.remove();
   body.classList.remove('cc-mob-has-native');
+  for(const btn of body.querySelectorAll(':scope > button.cc-mob-native-avatar'))btn.classList.remove('cc-mob-native-avatar');
   return;
  }
 
- if(nativeAvatar)body.classList.add('cc-mob-has-native');
- else body.classList.remove('cc-mob-has-native');
+ if(nativeAvatar){
+  body.classList.add('cc-mob-has-native');
+  nativeAvatar.classList.add('cc-mob-native-avatar');
+ }else{
+  body.classList.remove('cc-mob-has-native');
+ }
 
  if(!fake){
   fake=document.createElement('span');
@@ -1730,7 +1735,7 @@ html.cc-avatar-hidden [data-sentry-component="LeftTextContent"] > button.shrink-
  mask-size:contain!important;
 }
 html.cc-avatar-hidden .cc-mob-person-avatar{display:none!important;}
-[data-sentry-component="LeftTextContent"].cc-mob-has-native > button:has(img){display:none!important;}
+.cc-mob-native-avatar{display:none!important;}
 
 html.cc-avatar-heart [data-sentry-component="LeftTextContent"] > button.shrink-0{
  position:relative!important;display:flex!important;align-items:center!important;justify-content:center!important;
@@ -3794,7 +3799,7 @@ function stop(){if(captureMode){captureMode=false;unbindCaptureScroll();restoreC
   if(old.fill===null)svg.removeAttribute('fill');else svg.setAttribute('fill',old.fill);
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
- document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
+ document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
 document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
 
