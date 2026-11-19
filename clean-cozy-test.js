@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      90.0-integrated
+// @version      91.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -41,7 +41,7 @@ function outerStableRoomKey(){
 // Cross-origin coordination between our own two userscript instances only.
 // No access to the other frame's DOM, Zeta data, or internal APIs.
 let ccLastFrameReadyAt=0;
-let ccFrameMountedSent=false;
+let ccLastFrameMountedAt=0;
 let ccFinalReadySent=false;
 let ccParentSettingsHydrated=!FRAME_CHAT;
 let ccOuterFrameReady=false;
@@ -57,9 +57,10 @@ function onCozyFolderReady(){
 }
 if(OUTER_ROOM)window.addEventListener('cc-tool-folder-ready-v1',onCozyFolderReady);
 function announceFrameMounted(){
- if(!FRAME_CHAT||ccFrameMountedSent)return;
- if(!document.body)return;
- ccFrameMountedSent=true;
+ if(!FRAME_CHAT||ccParentSettingsHydrated||!document.body)return;
+ const now=Date.now();
+ if(now-ccLastFrameMountedAt<250)return;
+ ccLastFrameMountedAt=now;
  try{window.parent.postMessage({type:'clean-cozy-frame-mounted-v1'},'https://zeta-ai.io');}catch(e){}
 }
 function ccElementVisible(el){
@@ -96,7 +97,6 @@ function ccFrameReadyForReveal(){
   log&&composer&&header&&panel?.isConnected&&settingsBackdrop?.isConnected&&
   ccElementVisible(toggle)&&ccElementVisible(editShortcut)&&ccElementVisible(lineShortcut)&&
   captureButton?.isConnected&&help?.isConnected&&
-  document.documentElement.classList.contains('cc-tools-ready')&&
   ccSettingsActuallyApplied()
  );
 }
@@ -3654,6 +3654,7 @@ function schedule(){
  requestAnimationFrame(()=>{
   scheduled=false;
   markFrameChatRoot();
+  announceFrameMounted();
   finishPendingLineEdit();
   enhance();
   enhanceHeader();
