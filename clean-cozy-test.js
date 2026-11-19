@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      82.0-integrated
+// @version      83.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -279,30 +279,40 @@ function frameName(body){
  if(body.matches('[data-sentry-component="RightTextContent"]'))return '유저';
  return document.querySelector('[data-testid="chat-header-profile"]')?.textContent?.trim().slice(0,28)||'캐릭터';
 }
+
 function ccMainCharacterName(){
- const header=document.querySelector('[data-testid="chat-header-profile"] span')?.textContent?.trim()||'';
- if(header&&header.length<30)return header;
- const left=document.querySelector('[data-sentry-component="LeftTextContent"]');
- const avatarName=left?.querySelector('img[alt]')?.getAttribute('alt')?.trim()||'';
- if(avatarName&&avatarName.length<30)return avatarName;
+ for(const row of document.querySelectorAll('[data-sentry-component="LeftTextContent"]')){
+  const image=row.querySelector(':scope > button img[alt], img[alt]');
+  const name=image?.getAttribute('alt')?.trim()||'';
+  if(name&&name.length<30)return name;
+ }
  return '';
 }
-function updateMobAvatar(body){
+function updateMobPersonAvatar(body){
  if(!(body instanceof HTMLElement)||!body.matches('[data-sentry-component="LeftTextContent"]'))return;
- const avatarButton=[...body.querySelectorAll('button')].find(btn=>btn.querySelector('img'))||null;
- if(!avatarButton){
-  body.classList.remove('cc-mob-avatar');
-  return;
- }
- const nativeLabel=body.querySelector('.caption1')||(FRAME_CHAT?frameNameLabel(body):null);
- const speaker=body.querySelector('.cc-meta-name')?.textContent?.trim()||nativeLabel?.textContent?.trim()||'';
+ const speaker=body.querySelector('.cc-meta-name')?.textContent?.trim()||
+  body.querySelector('.caption1')?.textContent?.trim()||
+  (FRAME_CHAT?frameNameLabel(body)?.textContent?.trim():'')||'';
  const main=ccMainCharacterName();
  const norm=v=>String(v||'').replace(/\s+/g,' ').trim();
  const isMob=Boolean(speaker&&main&&norm(speaker)!==norm(main));
- body.classList.toggle('cc-mob-avatar',isMob);
- avatarButton.classList.toggle('cc-mob-avatar-button',isMob);
+ let fake=body.querySelector(':scope > .cc-mob-person-avatar');
+ const nativeAvatar=[...body.children].find(el=>el instanceof HTMLElement&&el.tagName==='BUTTON'&&el.querySelector('img'))||null;
+
  if(!isMob){
-  for(const btn of body.querySelectorAll('button.cc-mob-avatar-button'))btn.classList.remove('cc-mob-avatar-button');
+  fake?.remove();
+  body.classList.remove('cc-mob-has-native');
+  return;
+ }
+
+ if(nativeAvatar)body.classList.add('cc-mob-has-native');
+ else body.classList.remove('cc-mob-has-native');
+
+ if(!fake){
+  fake=document.createElement('span');
+  fake.className='cc-mob-person-avatar';
+  fake.setAttribute('aria-hidden','true');
+  body.insertBefore(fake,body.firstChild);
  }
 }
 let frameNativeEditButton=null;
@@ -1687,28 +1697,40 @@ html.cc-avatar-user-hidden [data-sentry-component="RightTextContent"] > button.s
 html.cc-avatar-hidden [data-sentry-component="RightTextContent"] > button.shrink-0 {display:none!important;}
 html.cc-avatar-hidden [data-sentry-component="LeftTextContent"] > button.shrink-0 {display:none!important;}
 
-/* V82: non-main speakers (mob/NPC) use a neutral person icon on the actual avatar button. */
-button.cc-mob-avatar-button{
- position:relative!important;display:flex!important;align-items:center!important;justify-content:center!important;
- flex-shrink:0!important;min-width:32px!important;width:32px!important;height:32px!important;
- overflow:hidden!important;border:1px solid var(--cc-stroke)!important;border-radius:50%!important;
- background:#FFFFFF!important;background-image:none!important;box-shadow:none!important;
+/* V83: synthetic avatar for non-main speakers. Native character avatar/header are untouched. */
+.cc-mob-person-avatar{
+ flex:0 0 32px!important;
+ width:32px!important;
+ height:32px!important;
+ min-width:32px!important;
+ border:1px solid var(--cc-stroke)!important;
+ border-radius:50%!important;
+ background:#FFFFFF!important;
+ display:flex!important;
+ align-items:center!important;
+ justify-content:center!important;
  color:var(--cc-icon)!important;
+ box-sizing:border-box!important;
+ transform:translateY(5px)!important;
+ pointer-events:none!important;
 }
-button.cc-mob-avatar-button > *{
- visibility:hidden!important;opacity:0!important;
-}
-button.cc-mob-avatar-button::after{
- content:''!important;position:absolute!important;inset:0!important;
- display:block!important;visibility:visible!important;opacity:1!important;
- width:18px!important;height:18px!important;margin:auto!important;
- background:currentColor!important;pointer-events:none!important;
+.cc-mob-person-avatar::before{
+ content:''!important;
+ display:block!important;
+ width:17px!important;
+ height:17px!important;
+ background:currentColor!important;
  -webkit-mask-image:url("data:image/svg+xml,%3Csvg%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20fill%3D%22black%22%20d%3D%22M12%2012a4%204%200%201%200-8%204%204%200%200%200%200%208Zm0%202c-4.42%200-8%202.24-8%205v1h16v-1c0-2.76-3.58-5-8-5Z%22%2F%3E%3C%2Fsvg%3E")!important;
- -webkit-mask-repeat:no-repeat!important;-webkit-mask-position:center!important;-webkit-mask-size:contain!important;
+ -webkit-mask-repeat:no-repeat!important;
+ -webkit-mask-position:center!important;
+ -webkit-mask-size:contain!important;
  mask-image:url("data:image/svg+xml,%3Csvg%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20fill%3D%22black%22%20d%3D%22M12%2012a4%204%200%201%200-8%204%204%200%200%200%200%208Zm0%202c-4.42%200-8%202.24-8%205v1h16v-1c0-2.76-3.58-5-8-5Z%22%2F%3E%3C%2Fsvg%3E")!important;
- mask-repeat:no-repeat!important;mask-position:center!important;mask-size:contain!important;
+ mask-repeat:no-repeat!important;
+ mask-position:center!important;
+ mask-size:contain!important;
 }
-html.cc-avatar-hidden button.cc-mob-avatar-button{display:none!important;}
+html.cc-avatar-hidden .cc-mob-person-avatar{display:none!important;}
+[data-sentry-component="LeftTextContent"].cc-mob-has-native > button:has(img){display:none!important;}
 
 html.cc-avatar-heart [data-sentry-component="LeftTextContent"] > button.shrink-0{
  position:relative!important;display:flex!important;align-items:center!important;justify-content:center!important;
@@ -2973,9 +2995,12 @@ function enhanceDates(){
 function enhance(){
  const bodies=document.querySelectorAll('[data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"]');
  for(const body of bodies){
-  updateMobAvatar(body);
   const bubble=body.querySelector('[data-sentry-component="ChatBubbleContainer"]');
-  if(!bubble||bubble.querySelector(':scope>.cc-meta'))continue;
+  if(!bubble)continue;
+  if(bubble.querySelector(':scope>.cc-meta')){
+   updateMobPersonAvatar(body);
+   continue;
+  }
   // Only attach a local clock to new rows rendered immediately after an actual send.
   // Do not invent timestamps for already-existing messages.
   if(FRAME_CHAT&&pendingSend?.frameKnown&&Date.now()-pendingSend.created<30000&&!pendingSend.frameKnown.has(body)){
@@ -2990,6 +3015,7 @@ function enhance(){
   if(time){const timeSpan=document.createElement('span');timeSpan.className='cc-meta-time';timeSpan.textContent='· '+time;meta.appendChild(timeSpan);}
   bubble.insertBefore(meta,bubble.firstChild);
   if(label){label.classList.add('cc-name-hidden');marked.add(label);}
+  updateMobPersonAvatar(body);
  }
 }
 
@@ -3768,7 +3794,7 @@ function stop(){if(captureMode){captureMode=false;unbindCaptureScroll();restoreC
   if(old.fill===null)svg.removeAttribute('fill');else svg.setAttribute('fill',old.fill);
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
- document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-avatar').forEach(el=>el.classList.remove('cc-mob-avatar'));document.querySelectorAll('.cc-mob-avatar-button').forEach(el=>el.classList.remove('cc-mob-avatar-button'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
+ document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
 document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
 
