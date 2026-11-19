@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      88.0-integrated
+// @version      90.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -41,14 +41,71 @@ function outerStableRoomKey(){
 // Cross-origin coordination between our own two userscript instances only.
 // No access to the other frame's DOM, Zeta data, or internal APIs.
 let ccLastFrameReadyAt=0;
+let ccFrameMountedSent=false;
+let ccFinalReadySent=false;
+let ccParentSettingsHydrated=!FRAME_CHAT;
+let ccOuterFrameReady=false;
+let ccOuterFolderReady=!!document.getElementById('zeta-universal-floating-folder-v1');
+function maybeRevealTheme(){
+ if(!OUTER_ROOM)return;
+ if(ccOuterFrameReady&&ccOuterFolderReady)hideThemeLoadingScreen();
+}
+function onCozyFolderReady(){
+ if(!OUTER_ROOM)return;
+ ccOuterFolderReady=true;
+ maybeRevealTheme();
+}
+if(OUTER_ROOM)window.addEventListener('cc-tool-folder-ready-v1',onCozyFolderReady);
+function announceFrameMounted(){
+ if(!FRAME_CHAT||ccFrameMountedSent)return;
+ if(!document.body)return;
+ ccFrameMountedSent=true;
+ try{window.parent.postMessage({type:'clean-cozy-frame-mounted-v1'},'https://zeta-ai.io');}catch(e){}
+}
+function ccElementVisible(el){
+ if(!(el instanceof HTMLElement)||!el.isConnected)return false;
+ const style=getComputedStyle(el);
+ if(style.display==='none'||style.visibility==='hidden'||style.opacity==='0')return false;
+ const rect=el.getBoundingClientRect();
+ return rect.width>0&&rect.height>0;
+}
+function ccSettingsActuallyApplied(){
+ const root=document.documentElement;
+ const avatarOk=(root.classList.contains('cc-avatar-hidden')===(settings.avatarMode==='none'))&&
+  (root.classList.contains('cc-avatar-user-hidden')===(settings.avatarMode==='userHidden'||settings.avatarMode==='userHiddenHeart'))&&
+  (root.classList.contains('cc-avatar-heart')===(settings.avatarMode==='userHiddenHeart'));
+ const highlightOk=root.classList.contains('cc-dialogue-highlight')===(settings.dialogueHighlight===true);
+ const avatarInput=panel?.querySelector('input[name="cc-avatar-mode"]:checked');
+ const highlightInput=panel?.querySelector('#cc-dialogue-highlight-toggle');
+ const narrationInput=panel?.querySelector('#cc-remove-narration-toggle');
+ const lineInput=panel?.querySelector('input[name="cc-line-break-mode"]:checked');
+ return avatarOk&&highlightOk&&
+  avatarInput?.value===settings.avatarMode&&
+  highlightInput?.checked===(settings.dialogueHighlight===true)&&
+  narrationInput?.checked===(settings.removeNarration===true)&&
+  lineInput?.value===settings.lineBreakMode;
+}
+function ccFrameReadyForReveal(){
+ if(!FRAME_CHAT||!ccParentSettingsHydrated)return false;
+ const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
+ const composer=document.querySelector('[data-testid="composer-input-box"]');
+ const header=document.querySelector('[data-testid="chat-header-profile"]');
+ const help=panel?.querySelector('.cc-help-open');
+ return !!(
+  document.body?.classList.contains('cc-frame-chat-root')&&
+  log&&composer&&header&&panel?.isConnected&&settingsBackdrop?.isConnected&&
+  ccElementVisible(toggle)&&ccElementVisible(editShortcut)&&ccElementVisible(lineShortcut)&&
+  captureButton?.isConnected&&help?.isConnected&&
+  document.documentElement.classList.contains('cc-tools-ready')&&
+  ccSettingsActuallyApplied()
+ );
+}
 function announceFrameControls(force=false){
- if(!FRAME_CHAT||ccStableRoomKey)return;
- if(!document.body?.classList.contains('cc-frame-chat-root'))return;
- const button=document.getElementById('cc-toggle');
- if(!button||!button.isConnected)return;
+ if(!FRAME_CHAT||ccFinalReadySent||!ccFrameReadyForReveal())return;
  const now=Date.now();
  if(!force&&now-ccLastFrameReadyAt<700)return;
  ccLastFrameReadyAt=now;
+ ccFinalReadySent=true;
  try{window.parent.postMessage({type:'clean-cozy-frame-controls-ready-v163',settings:ccSettingsSnapshot},'https://zeta-ai.io');}catch(e){}
 }
 function onCozyFrameReady(event){
@@ -56,15 +113,19 @@ function onCozyFrameReady(event){
  const scene=document.querySelector('iframe[title="scene"][src^="https://frame.pingpong.ai/"]');
  if(!scene||event.source!==scene.contentWindow)return;
  const data=event.data;
- if(data?.type==='clean-cozy-frame-controls-ready-v163'){
-  // The outer zeta-ai.io document is the source of truth for saved UI settings.
-  // Do not let the iframe's startup/default snapshot overwrite persisted choices.
+ if(data?.type==='clean-cozy-frame-mounted-v1'){
+  // Phase 1: iframe exists. Hydrate it with the outer document's saved settings first.
   const room=outerStableRoomKey();
   sendToCozyScene('room-key',room);
   sendToCozyScene('turn-store',{room,turns:roomTurnRows(room)});
   sendToCozyScene('settings',settings);
+  return;
+ }
+ if(data?.type==='clean-cozy-frame-controls-ready-v163'){
+  // Phase 2: the iframe verified chat DOM, all three controls and settings state.
   document.documentElement.classList.add('cc-inner-controls-ready');
-  hideThemeLoadingScreen();
+  ccOuterFrameReady=true;
+  maybeRevealTheme();
   return;
  }
  if(data?.type==='cc-private-ui-v164'&&data.command==='turn-sync'){
@@ -114,6 +175,8 @@ function receiveCozyUIMessage(event){
   // Parent -> scene hydration: persist locally without echoing the same payload back.
   persistSettingsLocal();
   applyOpts();
+  ccParentSettingsHydrated=true;
+  schedule();
  }
 }
 if(FRAME_CHAT)window.addEventListener('message',receiveCozyUIMessage);
@@ -3308,7 +3371,10 @@ function captureUserIdentity(){
   right?.querySelector('.caption1')?.textContent?.trim(),
   FRAME_CHAT&&right?frameName(right):''
  ].filter(captureValidName);
- return [...new Set(candidates)].sort((a,b)=>b.length-a.length);
+ const full=candidates[0]||'';
+ const aliases=new Set(candidates);
+ if(/^[가-힣]{3,}$/.test(full))aliases.add(full.slice(-2));
+ return [...aliases].filter(captureValidName).sort((a,b)=>b.length-a.length);
 }
 function escapeCaptureRegExp(value){
  return value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
@@ -3881,7 +3947,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();restoreCapturePlaceholders();reconcileAvatarsAfterCapture();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();restoreCapturePlaceholders();reconcileAvatarsAfterCapture();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM){window.removeEventListener('message',onCozyFrameReady);window.removeEventListener('cc-tool-folder-ready-v1',onCozyFolderReady);}if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -3889,7 +3955,7 @@ function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbin
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameMounted();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
 
 
@@ -5489,6 +5555,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
     placeLauncher();
     render();
+    try{w.dispatchEvent(new CustomEvent('cc-tool-folder-ready-v1'));}catch(_){}
   }
 
   function startObserver() {
