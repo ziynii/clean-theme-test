@@ -2,7 +2,7 @@
 (()=>{
 'use strict';
 const ID='zeta-clean-cozy-v41';
-const VERSION=63;
+const VERSION=65;
 const PALETTES={"gray":{"ko":"그레이","bg":"#F7F7F8","user":"#F1F1F3","accent":"#A7ABB1","strong":"#4B5057","soft":"#EEEFF1","hover":"#E3E5E8","stroke":"#E1E3E6","icon":"#737780","scroll":"#C8CBD0","alt":"#FAFAFB"},"pink":{"ko":"연핑크","bg":"#FCF8FA","user":"#F8EDF1","accent":"#D8B7C5","strong":"#8D6576","soft":"#F7EDF2","hover":"#F0E1E8","stroke":"#EEDFE5","icon":"#9B7B88","scroll":"#DFC9D2","alt":"#FFFBFC"},"yellow":{"ko":"연노랑","bg":"#FCFBF5","user":"#F9F4E3","accent":"#D8C89A","strong":"#8B7951","soft":"#F7F3E5","hover":"#F0EAD7","stroke":"#EBE5D1","icon":"#98855D","scroll":"#DDD4B6","alt":"#FFFEF9"},"blue":{"ko":"연파랑","bg":"#F7FAFD","user":"#ECF3FA","accent":"#B3CDE3","strong":"#587B9B","soft":"#EDF4FA","hover":"#E1EDF7","stroke":"#DDE9F2","icon":"#7895AE","scroll":"#C8D9E8","alt":"#FBFDFF"},"green":{"ko":"연두","bg":"#F8FBF7","user":"#EFF6EA","accent":"#BED3B2","strong":"#6B8961","soft":"#F0F7EC","hover":"#E4EFE0","stroke":"#DFEADD","icon":"#81997B","scroll":"#CDDCC7","alt":"#FBFDFB"},"purple":{"ko":"연보라","bg":"#FAF8FD","user":"#F2EDFA","accent":"#C9B9E1","strong":"#7E6A9C","soft":"#F3EEFA","hover":"#EAE2F5","stroke":"#E7E0EF","icon":"#9485AB","scroll":"#D7CBE5","alt":"#FDFBFF"}};
 const chosen=window.__ccNextPalette;
 try{delete window.__ccNextPalette;}catch(e){}
@@ -507,6 +507,12 @@ html.cc-tools-ready [data-sentry-component="QuickReplyButton"]{display:none!impo
   background:#FAFAFA;color:#33363A;font:12px/1.25 sans-serif;text-align:center;cursor:pointer;}
 #cc-panel .cc-action:disabled{color:#B4B6B9;cursor:not-allowed;opacity:.65;}
 #cc-panel .cc-action:not(:disabled):active{background:#EDEEEF;}
+#cc-panel .cc-action.cc-capture-active{
+ background:var(--cc-user)!important;
+ border-color:var(--cc-accent)!important;
+ color:var(--cc-accent-strong)!important;
+ font-weight:600!important;
+}
 
 #cc-panel .cc-help{color:#898C90;font-size:11px;line-height:1.4;margin-top:10px}
 #cc-toggle{left:auto!important;right:12px;bottom:128px;}
@@ -3030,6 +3036,292 @@ function pressLineTool(){
  lineEditOpenTimer=setTimeout(()=>{finishPendingLineEdit();lineEditPending=false;lineEditOpenTimer=null;},750);
 }
 
+/* V65 capture mode — mask only the activation view and up to 5 newly reached turns
+   in each scroll direction. Local DOM text only; no Zeta API and no message persistence. */
+let captureMode=false;
+let captureButton=null;
+let captureIdentity={charNames:[],userNames:[]};
+const captureOriginals=new WeakMap();
+const captureNodes=new Set();
+const captureAllowedTurns=new Set();
+const captureSeenTurns={up:new Set(),down:new Set()};
+let captureScrollRoot=null;
+let captureLastScrollTop=0;
+let captureScrollDirection=null;
+let captureScrollRAF=0;
+const CAPTURE_TURN_LIMIT=5;
+const CAPTURE_SCROLL_THRESHOLD=8;
+
+function captureValidName(value){
+ const name=String(value||'').trim();
+ return !!(
+  name &&
+  name!=='유저' &&
+  name!=='캐릭터' &&
+  name!=='{{user}}' &&
+  name!=='{{char}}' &&
+  !/^#[0-9a-f]{3,8}$/i.test(name)
+ );
+}
+function captureCharacterIdentity(){
+ const left=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="LeftTextContent"]');
+ const header=document.querySelector('[data-testid="chat-header-profile"] span')?.textContent?.trim()||'';
+ const candidates=[
+  left?.querySelector(':scope > button img[alt]')?.getAttribute('alt')?.trim(),
+  left?.querySelector('.cc-meta-name')?.textContent?.trim(),
+  left?.querySelector('.caption1')?.textContent?.trim(),
+  FRAME_CHAT&&left?frameName(left):'',
+  header
+ ].filter(captureValidName);
+ const full=candidates[0]||'';
+ const aliases=new Set(candidates);
+ if(/^[가-힣]{3,}$/.test(full))aliases.add(full.slice(-2));
+ return [...aliases].filter(captureValidName).sort((a,b)=>b.length-a.length);
+}
+function captureUserIdentity(){
+ const right=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="RightTextContent"]');
+ const candidates=[
+  right?.querySelector(':scope > button img[alt]')?.getAttribute('alt')?.trim(),
+  right?.querySelector('.cc-meta-name')?.textContent?.trim(),
+  right?.querySelector('.caption1')?.textContent?.trim(),
+  FRAME_CHAT&&right?frameName(right):''
+ ].filter(captureValidName);
+ return [...new Set(candidates)].sort((a,b)=>b.length-a.length);
+}
+function escapeCaptureRegExp(value){
+ return value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+}
+function replaceCaptureNames(value){
+ let output=String(value||'');
+ const replacements=[
+  ...captureIdentity.charNames.map(name=>[name,'{{char}}']),
+  ...captureIdentity.userNames.map(name=>[name,'{{user}}'])
+ ].sort((a,b)=>b[0].length-a[0].length);
+ for(const [name,replacement] of replacements){
+  if(!name||name===replacement)continue;
+  output=output.replace(new RegExp(escapeCaptureRegExp(name),'g'),replacement);
+ }
+ return output;
+}
+function captureNodeAllowed(node){
+ const parent=node?.parentElement;
+ if(!parent)return false;
+ if(parent.closest('#cc-panel,#cc-settings-backdrop,#cc-toggle,#cc-edit-shortcut,#cc-line-shortcut'))return false;
+ if(parent.closest('textarea,input,[contenteditable="true"],script,style'))return false;
+ return true;
+}
+function captureLog(){
+ return document.querySelector('[role="log"][aria-label="Chat messages"]');
+}
+function captureTurnKey(turn,index){
+ const user=turn.rows.find(row=>row.matches('[data-sentry-component="RightTextContent"]'));
+ const first=turn.rows[0];
+ const key=(user&&scopedKey(user))||(first&&scopedKey(first));
+ return key||('capture-dom-'+index);
+}
+function captureTurns(){
+ const log=captureLog();
+ if(!log)return [];
+ const rows=[...log.querySelectorAll(':scope [data-sentry-component="RightTextContent"],:scope [data-sentry-component="LeftTextContent"]')];
+ const turns=[];
+ let current=null;
+ for(const row of rows){
+  const isUser=row.matches('[data-sentry-component="RightTextContent"]');
+  if(isUser||!current){
+   current={rows:[]};
+   turns.push(current);
+  }
+  current.rows.push(row);
+ }
+ turns.forEach((turn,index)=>turn.key=captureTurnKey(turn,index));
+ return turns;
+}
+function captureViewportRect(){
+ const log=captureLog();
+ if(!log)return {top:0,bottom:innerHeight};
+ const rect=log.getBoundingClientRect();
+ return {
+  top:Math.max(0,rect.top),
+  bottom:Math.min(innerHeight,rect.bottom)
+ };
+}
+function captureVisibleTurns(turns){
+ const viewport=captureViewportRect();
+ return turns.filter(turn=>turn.rows.some(row=>{
+  const rect=row.getBoundingClientRect();
+  return rect.bottom>viewport.top+2 && rect.top<viewport.bottom-2;
+ }));
+}
+function maskCaptureRow(row){
+ const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+ let node;
+ while((node=walker.nextNode())){
+  if(!captureNodeAllowed(node))continue;
+  const current=node.nodeValue||'';
+  let record=captureOriginals.get(node);
+  if(record){
+   if(current===record.masked)continue;
+   const masked=replaceCaptureNames(current);
+   record={original:current,masked};
+   captureOriginals.set(node,record);
+   if(masked!==current)node.nodeValue=masked;
+   continue;
+  }
+  const masked=replaceCaptureNames(current);
+  if(masked===current)continue;
+  captureOriginals.set(node,{original:current,masked});
+  captureNodes.add(node);
+  node.nodeValue=masked;
+ }
+}
+function restoreCaptureNode(node){
+ const record=captureOriginals.get(node);
+ if(record&&node.isConnected&&node.nodeValue===record.masked)node.nodeValue=record.original;
+ captureNodes.delete(node);
+}
+function restoreCaptureOutsideAllowed(){
+ for(const node of [...captureNodes]){
+  if(!node.isConnected){captureNodes.delete(node);continue;}
+  const row=node.parentElement?.closest?.('[data-sentry-component="RightTextContent"],[data-sentry-component="LeftTextContent"]');
+  if(!row){restoreCaptureNode(node);continue;}
+  const turn=captureTurns().find(t=>t.rows.includes(row));
+  if(!turn||!captureAllowedTurns.has(turn.key))restoreCaptureNode(node);
+ }
+}
+function applyCaptureAllowed(){
+ if(!captureMode)return;
+ const turns=captureTurns();
+ for(const turn of turns){
+  if(!captureAllowedTurns.has(turn.key))continue;
+  for(const row of turn.rows)maskCaptureRow(row);
+ }
+ restoreCaptureOutsideAllowed();
+ // Header is intentionally masked while capture mode is on.
+ const header=document.querySelector('[data-testid="chat-header-profile"]');
+ if(header){
+  const walker=document.createTreeWalker(header,NodeFilter.SHOW_TEXT);
+  let node;
+  while((node=walker.nextNode())){
+   if(!captureNodeAllowed(node))continue;
+   const current=node.nodeValue||'';
+   let record=captureOriginals.get(node);
+   if(record){
+    if(current===record.masked)continue;
+    const masked=replaceCaptureNames(current);
+    captureOriginals.set(node,{original:current,masked});
+    if(masked!==current)node.nodeValue=masked;
+   }else{
+    const masked=replaceCaptureNames(current);
+    if(masked!==current){
+     captureOriginals.set(node,{original:current,masked});
+     captureNodes.add(node);
+     node.nodeValue=masked;
+    }
+   }
+  }
+ }
+}
+function captureAddVisibleInDirection(direction){
+ if(!captureMode)return;
+ const turns=captureTurns();
+ const visible=captureVisibleTurns(turns);
+ if(!visible.length)return;
+
+ for(const turn of visible){
+  if(captureAllowedTurns.has(turn.key))continue;
+  const seen=captureSeenTurns[direction];
+  if(seen.size>=CAPTURE_TURN_LIMIT)continue;
+  seen.add(turn.key);
+  captureAllowedTurns.add(turn.key);
+ }
+ applyCaptureAllowed();
+ updateCaptureButton();
+}
+function captureOnScroll(){
+ if(!captureMode||!captureScrollRoot)return;
+ const next=captureScrollRoot.scrollTop||0;
+ const delta=next-captureLastScrollTop;
+ if(Math.abs(delta)>=CAPTURE_SCROLL_THRESHOLD){
+  captureScrollDirection=delta>0?'down':'up';
+  captureLastScrollTop=next;
+ }
+ if(captureScrollRAF)return;
+ captureScrollRAF=requestAnimationFrame(()=>{
+  captureScrollRAF=0;
+  if(captureScrollDirection)captureAddVisibleInDirection(captureScrollDirection);
+ });
+}
+function bindCaptureScroll(){
+ const log=captureLog();
+ const root=log?.closest('[class*="overflow-y-auto"]')||log;
+ if(captureScrollRoot===root)return;
+ if(captureScrollRoot)captureScrollRoot.removeEventListener('scroll',captureOnScroll);
+ captureScrollRoot=root||null;
+ if(captureScrollRoot){
+  captureLastScrollTop=captureScrollRoot.scrollTop||0;
+  captureScrollRoot.addEventListener('scroll',captureOnScroll,{passive:true});
+ }
+}
+function unbindCaptureScroll(){
+ if(captureScrollRoot)captureScrollRoot.removeEventListener('scroll',captureOnScroll);
+ captureScrollRoot=null;
+ if(captureScrollRAF)cancelAnimationFrame(captureScrollRAF);
+ captureScrollRAF=0;
+ captureScrollDirection=null;
+}
+function restoreCaptureMode(){
+ for(const node of [...captureNodes])restoreCaptureNode(node);
+}
+function updateCaptureButton(){
+ if(!captureButton)return;
+ captureButton.classList.toggle('cc-capture-active',captureMode);
+ captureButton.setAttribute('aria-pressed',String(captureMode));
+ captureButton.textContent=captureMode?'캡쳐 해제':'캡쳐모드';
+ const up=captureSeenTurns.up.size;
+ const down=captureSeenTurns.down.size;
+ captureButton.title=captureMode
+  ? `현재 화면 기준 · 위 ${up}/${CAPTURE_TURN_LIMIT}턴 · 아래 ${down}/${CAPTURE_TURN_LIMIT}턴`
+  : '캡쳐할 대화 근처에서 켜세요 · 이름을 {{char}} / {{user}}로 가립니다';
+}
+function setCaptureMode(enabled){
+ const next=enabled===true;
+ if(next===captureMode){if(next){bindCaptureScroll();applyCaptureAllowed();}return;}
+ if(next){
+  captureIdentity={
+   charNames:captureCharacterIdentity(),
+   userNames:captureUserIdentity()
+  };
+  captureAllowedTurns.clear();
+  captureSeenTurns.up.clear();
+  captureSeenTurns.down.clear();
+  captureMode=true;
+
+  // Activation screen is the fixed anchor. Mask every turn visible right now.
+  const initial=captureVisibleTurns(captureTurns());
+  for(const turn of initial)captureAllowedTurns.add(turn.key);
+
+  bindCaptureScroll();
+  applyCaptureAllowed();
+ }else{
+  captureMode=false;
+  unbindCaptureScroll();
+  restoreCaptureMode();
+  captureAllowedTurns.clear();
+  captureSeenTurns.up.clear();
+  captureSeenTurns.down.clear();
+  captureIdentity={charNames:[],userNames:[]};
+  schedule();
+ }
+ updateCaptureButton();
+}
+
+/* Called by the shared mutation batcher. It never expands the 5-turn boundary by itself. */
+function applyCaptureMode(){
+ if(!captureMode)return;
+ bindCaptureScroll();
+ applyCaptureAllowed();
+}
+
 /* V63 safe optimization stage 1:
    Batch repeated DOM mutations into one animation-frame pass.
    No dirty-row cache, no extra timer, no change to date/turn logic. */
@@ -3048,6 +3340,7 @@ function schedule(){
   updateDialogueHighlight();
   makeSendArrow();
   updateActionAvailability();
+  applyCaptureMode();
  });
 }
 const actions=[
@@ -3224,6 +3517,12 @@ function makeControls(){
   btn.addEventListener('click',()=>runOriginalAction(key));
   actionButtons.set(key,btn);list.appendChild(btn);
  }
+ captureButton=document.createElement('button');
+ captureButton.className='cc-action';
+ captureButton.type='button';
+ captureButton.addEventListener('click',()=>setCaptureMode(!captureMode));
+ list.appendChild(captureButton);
+ updateCaptureButton();
  panel.appendChild(list);
  // The scene's floating layers can override CSS visibility. Keep the settings
  // panel open/closed state explicit, and move it into view before rendering.
@@ -3262,7 +3561,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -3270,5 +3569,5 @@ function stop(){document.querySelector('.cc-frame-chat-root')?.classList.remove(
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
