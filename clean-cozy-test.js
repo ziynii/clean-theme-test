@@ -3524,6 +3524,9 @@ function runOriginalAction(key){
 function onSettingsOutsidePointer(event){
  if(!panel||panel.hidden)return;
  const target=event.target;
+ // 사용방법 팝업은 설정창 위에 별도 레이어로 떠 있다.
+ // 팝업/X/팝업 배경을 누른 것은 '설정창 바깥 클릭'으로 취급하지 않는다.
+ if(target instanceof Element&&target.closest('#cc-help-dialog,#cc-help-backdrop'))return;
  if(target instanceof Node&&(panel.contains(target)||toggle?.contains(target)))return;
  panel.hidden=true;panel.style.removeProperty('display');if(settingsBackdrop)settingsBackdrop.hidden=true;toggle?.setAttribute('aria-expanded','false');
 }
@@ -3780,7 +3783,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   const STORE_KEY = 'zeta-universal-floating-folder-items-v1';
   const POS_KEY = 'zeta-universal-floating-folder-position-v1';
   const HIDDEN_ATTR = 'data-zff-managed-v1';
-  const VERSION = '1.4.4-safe-bottom-sheet';
+  const VERSION = '1.4.5-help-layer-legacy-cleanup';
   const CHANNEL = 'zeta-floating-folder-v11';
   const IS_OUTER = /(^|\.)zeta-ai\.io$/i.test(location.hostname) && w.top === w;
   const IS_FRAME_WORKER = location.hostname === 'frame.pingpong.ai';
@@ -3790,6 +3793,15 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   let geometryInterval = 0;
 
   try { w[INSTANCE]?.destroy?.(); } catch (_) {}
+
+  // 구형 별도 도구주머니 스크립트가 아직 켜져 있거나 같은 페이지에 남아 있으면
+  // 예전 보라/그라데이션 폴더가 통합 폴더와 함께 보일 수 있다.
+  // 통합본 시작 시 구형 인스턴스/호스트만 정리한다.
+  try { w.__ZETA_FULLSCREEN_TOOL_POCKET__?.destroy?.(); } catch (_) {}
+  try { w.__ZETA_TOOL_POCKET_ONLY__?.destroy?.(); } catch (_) {}
+  try { d.getElementById('zeta-tool-pocket')?.remove(); } catch (_) {}
+  // 이전 Universal 계열의 남은 호스트도 현재 통합 UI를 만들기 전에 제거한다.
+  try { d.getElementById(HOST_ID)?.remove(); } catch (_) {}
 
   const disposers = [];
   const hiddenStyles = new Map();
