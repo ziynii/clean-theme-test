@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      84.0-integrated
+// @version      85.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -1714,7 +1714,7 @@ html.cc-avatar-hidden [data-sentry-component="LeftTextContent"] > button.shrink-
  display:flex!important;
  align-items:center!important;
  justify-content:center!important;
- color:var(--cc-icon)!important;
+ color:var(--cc-accent-strong)!important;
  box-sizing:border-box!important;
  transform:translateY(5px)!important;
  pointer-events:none!important;
@@ -1725,14 +1725,14 @@ html.cc-avatar-hidden [data-sentry-component="LeftTextContent"] > button.shrink-
  width:17px!important;
  height:17px!important;
  background:currentColor!important;
- -webkit-mask-image:url("data:image/svg+xml,%3Csvg%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20fill%3D%22black%22%20d%3D%22M12%2012a4%204%200%201%200-8%204%204%200%200%200%200%208Zm0%202c-4.42%200-8%202.24-8%205v1h16v-1c0-2.76-3.58-5-8-5Z%22%2F%3E%3C%2Fsvg%3E")!important;
+ -webkit-mask-image:url("data:image/svg+xml,%3Csvg%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M19.0711%2013.1421L13.4142%2018.799C12.6332%2019.58%2011.3668%2019.58%2010.5858%2018.799L4.92894%2013.1421C2.97632%2011.1895%202.97632%208.02369%204.92894%206.07106C6.88157%204.11844%2010.0474%204.11844%2012%206.07106C13.9526%204.11844%2017.1185%204.11844%2019.0711%206.07106C21.0237%208.02369%2021.0237%2011.1895%2019.0711%2013.1421Z%22%20stroke%3D%22black%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E")!important;
  -webkit-mask-repeat:no-repeat!important;
  -webkit-mask-position:center!important;
- -webkit-mask-size:contain!important;
- mask-image:url("data:image/svg+xml,%3Csvg%20viewBox%3D%220%200%2024%2024%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20fill%3D%22black%22%20d%3D%22M12%2012a4%204%200%201%200-8%204%204%200%200%200%200%208Zm0%202c-4.42%200-8%202.24-8%205v1h16v-1c0-2.76-3.58-5-8-5Z%22%2F%3E%3C%2Fsvg%3E")!important;
+ -webkit-mask-size:19px 19px!important;
+ mask-image:url("data:image/svg+xml,%3Csvg%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%3E%3Cpath%20d%3D%22M19.0711%2013.1421L13.4142%2018.799C12.6332%2019.58%2011.3668%2019.58%2010.5858%2018.799L4.92894%2013.1421C2.97632%2011.1895%202.97632%208.02369%204.92894%206.07106C6.88157%204.11844%2010.0474%204.11844%2012%206.07106C13.9526%204.11844%2017.1185%204.11844%2019.0711%206.07106C21.0237%208.02369%2021.0237%2011.1895%2019.0711%2013.1421Z%22%20stroke%3D%22black%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E")!important;
  mask-repeat:no-repeat!important;
  mask-position:center!important;
- mask-size:contain!important;
+ mask-size:19px 19px!important;
 }
 html.cc-avatar-hidden .cc-mob-person-avatar{display:none!important;}
 .cc-mob-native-avatar{display:none!important;}
