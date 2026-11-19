@@ -44,12 +44,8 @@ function onCozyFrameReady(event){
  if(!scene||event.source!==scene.contentWindow)return;
  const data=event.data;
  if(data?.type==='clean-cozy-frame-controls-ready-v163'){
-  // The scene may already hold the user's latest choices from an older version.
-  // Adopt those first so a reload cannot overwrite them with outer defaults.
-  if(data.settings&&typeof data.settings==='object'){
-   absorbSettings(data.settings);
-   persistSettingsLocal();
-  }
+  // The outer zeta-ai.io document is the source of truth for saved UI settings.
+  // Do not let the iframe's startup/default snapshot overwrite persisted choices.
   const room=outerStableRoomKey();
   sendToCozyScene('room-key',room);
   sendToCozyScene('turn-store',{room,turns:roomTurnRows(room)});
@@ -115,36 +111,6 @@ if(FRAME_CHAT)window.addEventListener('message',receiveCozyUIMessage);
 
 // The outer Zeta page and the scene iframe have separate documents and origins.
 // Mark only a visible chat subtree once Zeta has actually rendered chat elements.
-
-/* V63 performance: batch iframe DOM work without changing turn/timestamp logic.
-   MutationObserver tells us which rendered message rows changed; only those rows
-   need the expensive frame-mapping/Zeta-watermark pass. */
-const ccDirtyFrameRows=new Set();
-
-function ccAddDirtyFrameRow(node,log){
- if(!FRAME_CHAT||!log||!node)return;
- const el=node instanceof Element?node:node.parentElement;
- if(!el)return;
- const selector='div.flex.flex-row.items-start';
- const direct=el.matches?.(selector)?el:el.closest?.(selector);
- if(direct&&log.contains(direct))ccDirtyFrameRows.add(direct);
- if(el.querySelectorAll){
-  for(const row of el.querySelectorAll(selector)){
-   if(log.contains(row))ccDirtyFrameRows.add(row);
-  }
- }
-}
-function collectDirtyFrameRows(mutations){
- if(!FRAME_CHAT||!Array.isArray(mutations)||!mutations.length)return;
- const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
- if(!log)return;
- for(const mutation of mutations){
-  ccAddDirtyFrameRow(mutation.target,log);
-  for(const node of mutation.addedNodes||[])ccAddDirtyFrameRow(node,log);
-  for(const node of mutation.removedNodes||[])ccAddDirtyFrameRow(node,log);
- }
-}
-
 function hideFrameCharacterZetaMarks(row){
  if(!FRAME_CHAT||!row||row.matches('[data-sentry-component="RightTextContent"]'))return;
 
@@ -235,7 +201,7 @@ function hideFrameCharacterZetaMarks(row){
   }
  }
 }
-function markFrameChatRoot(rowsToProcess=null){
+function markFrameChatRoot(){
  if(!FRAME_CHAT)return;
  const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
  if(!log)return;
@@ -248,11 +214,7 @@ function markFrameChatRoot(rowsToProcess=null){
  const composerDock=composer?.closest('[class*="bg-linear-to-b"]');
  if(composerDock&&!composerDock.hasAttribute('data-sentry-component'))composerDock.setAttribute('data-sentry-component','ChatComposer');
  // Old Zeta exposed named sentry wrappers. New Zeta renders left/right rows directly.
- const frameRows=Array.isArray(rowsToProcess)
-  ? rowsToProcess
-  : [...log.querySelectorAll('div.flex.flex-row.items-start')];
- for(const row of frameRows){
-  if(!(row instanceof Element)||!row.isConnected||!log.contains(row))continue;
+ for(const row of log.querySelectorAll('div.flex.flex-row.items-start')){
   const cls=row.classList;
   const isUser=cls.contains('ml-auto')&&cls.contains('pr-2');
   const isCharacter=cls.contains('pl-2')&&cls.contains('pr-[72px]');
@@ -3068,78 +3030,24 @@ function pressLineTool(){
  lineEditOpenTimer=setTimeout(()=>{finishPendingLineEdit();lineEditPending=false;lineEditOpenTimer=null;},750);
 }
 
-/* V63 performance:
-   - Ignore observer feedback created only by Clean Cozy's own injected nodes.
-   - Coalesce many streaming mutations into one animation-frame request.
-   - Run the expensive full enhancement pass at most about 14 times/sec.
-   The send -> turnPending -> user/character timestamp logic is unchanged. */
-const CC_HEAVY_MIN_INTERVAL=72;
-let ccLastHeavyAt=0;
-let ccHeavyTimer=null;
-let ccForceFullFrameScan=false;
-const CC_THEME_MUTATION_SELECTOR=[
- '.cc-meta','.cc-meta-date','.cc-meta-time','.cc-letter-meta',
- '.cc-dialogue-inline','#cc-toggle','#cc-edit-shortcut','#cc-line-shortcut',
- '#cc-panel','#cc-settings-backdrop','svg[data-cc-arrow]'
-].join(',');
-
-function ccThemeOwnedMutationNode(node){
- const el=node instanceof Element?node:node?.parentElement;
- if(!el)return false;
- return !!(el.matches?.(CC_THEME_MUTATION_SELECTOR)||el.closest?.(CC_THEME_MUTATION_SELECTOR));
-}
-function ccMutationIsThemeOnly(mutation){
- const nodes=[...(mutation.addedNodes||[]),...(mutation.removedNodes||[])];
- return nodes.length>0&&nodes.every(ccThemeOwnedMutationNode);
-}
-function ccRunHeavyEnhance(){
- ccHeavyTimer=null;
- const rows=ccForceFullFrameScan?null:[...ccDirtyFrameRows];
- ccDirtyFrameRows.clear();
- ccForceFullFrameScan=false;
-
- // Map only changed iframe rows. A manual/periodic schedule still requests a full scan.
- markFrameChatRoot(rows);
- announceFrameControls();
-
- // Keep these functions and their ordering exactly as before.
- enhance();
- enhanceHeader();
- enhanceDates();
- enhanceLetters();
- updateDialogueHighlight();
- makeSendArrow();
- updateActionAvailability();
-
- ccLastHeavyAt=performance.now();
-}
-function schedule(mutations,forceFullFrameScan=false){
- if(Array.isArray(mutations)){
-  const relevant=mutations.filter(mutation=>!ccMutationIsThemeOnly(mutation));
-  if(!relevant.length)return;
-  collectDirtyFrameRows(relevant);
- }else{
-  // Calls not coming from MutationObserver are intentional maintenance passes.
-  ccForceFullFrameScan=true;
- }
- if(forceFullFrameScan)ccForceFullFrameScan=true;
-
+/* V63 safe optimization stage 1:
+   Batch repeated DOM mutations into one animation-frame pass.
+   No dirty-row cache, no extra timer, no change to date/turn logic. */
+function schedule(){
  if(scheduled)return;
  scheduled=true;
  requestAnimationFrame(()=>{
   scheduled=false;
-
-  // Edit-textarea formatting is user initiated, so keep its response immediate.
+  markFrameChatRoot();
+  announceFrameControls();
   finishPendingLineEdit();
-
-  // If a heavy pass is already queued, newly dirty rows stay in the Set and
-  // will be consumed by that same pass.
-  if(ccHeavyTimer)return;
-
-  const elapsed=performance.now()-ccLastHeavyAt;
-  const wait=Math.max(0,CC_HEAVY_MIN_INTERVAL-elapsed);
-  if(wait>0)ccHeavyTimer=setTimeout(ccRunHeavyEnhance,wait);
-  else ccRunHeavyEnhance();
+  enhance();
+  enhanceHeader();
+  enhanceDates();
+  enhanceLetters();
+  updateDialogueHighlight();
+  makeSendArrow();
+  updateActionAvailability();
  });
 }
 const actions=[
@@ -3354,7 +3262,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(ccHeavyTimer)clearTimeout(ccHeavyTimer);ccHeavyTimer=null;ccDirtyFrameRows.clear();document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -3362,5 +3270,5 @@ function stop(){document.querySelector('.cc-frame-chat-root')?.classList.remove(
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{if(document.querySelector('.cc-meta-date'))schedule(null,true);},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
