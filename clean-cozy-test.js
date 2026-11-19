@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      79.0-integrated
+// @version      80.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -216,12 +216,10 @@ function hideFrameCharacterZetaMarks(row){
 }
 function markFrameChatRoot(){
  if(!FRAME_CHAT)return;
- // 테마 CSS 스위치는 채팅 로그 렌더를 기다리지 않고 먼저 켠다.
- // 첫 로딩에서 iframe DOM/hydration 순서가 늦어도 기본 UI가 잠깐 틀어지는 시간을 줄인다.
- const root=document.body;
- if(root&&!root.classList.contains('cc-frame-chat-root'))root.classList.add('cc-frame-chat-root');
  const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
  if(!log)return;
+ const root=document.body;
+ if(!root.classList.contains('cc-frame-chat-root'))root.classList.add('cc-frame-chat-root');
  // Read only the rendered DOM. Do not access network, framework state, or APIs.
  const header=document.querySelector('header');
  if(header&&!header.hasAttribute('data-sentry-component'))header.setAttribute('data-sentry-component','Header');
@@ -2273,7 +2271,6 @@ body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] bu
 }
 `;
 let panel=null,toggle=null,editShortcut=null,settingsBackdrop=null,observer=null,scheduled=false;
-const ccStartupTimers=[];
 const sendOriginals=new Map();
 function makeSendArrow(){
  const svg=document.querySelector('[data-testid="chat-send-button"] svg');
@@ -3713,7 +3710,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){while(ccStartupTimers.length)clearTimeout(ccStartupTimers.pop());if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -3721,11 +3718,7 @@ function stop(){while(ccStartupTimers.length)clearTimeout(ccStartupTimers.pop())
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});
-// 제타의 첫 hydration은 기존 노드의 class/속성만 바꾸는 경우가 있어 childList observer가 놓칠 수 있다.
-// 상시 감시를 늘리지 않고, 최초 2초 동안만 유한한 안정화 패스를 돌린다.
-[50,150,350,700,1200,2000].forEach(ms=>ccStartupTimers.push(setTimeout(schedule,ms)));
-if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>ccStartupTimers.push(setTimeout(()=>announceFrameControls(true),ms)));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)ccStartupTimers.push(setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500));
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameControls(true);resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
 
 
@@ -3869,7 +3862,10 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   // 기능/디자인을 건드리지 않고 드래그 후보에서만 제외한다.
   function isProtectedCozyNode(node) {
     if (!(node instanceof Element)) return false;
-    return !!node.closest?.('#cc-toggle,#cc-edit-shortcut,#cc-line-shortcut,#cc-panel,#cc-settings-backdrop');
+    return !!node.closest?.(
+      '#cc-toggle,#cc-edit-shortcut,#cc-line-shortcut,#cc-panel,#cc-settings-backdrop,' +
+      '[role="log"][aria-label="Chat messages"],[data-testid="composer-input-box"]'
+    );
   }
 
   function isUsableElement(element) {
@@ -4298,9 +4294,20 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       const parsed = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
       if (Array.isArray(parsed)) rows = parsed;
     } catch (_) {}
+    let cleaned = false;
     rows.forEach(row => {
-      if (row?.id && (row.kind === 'single' || row.kind === 'group')) savedEntries.set(String(row.id), row);
+      if (!row?.id || (row.kind !== 'single' && row.kind !== 'group')) return;
+      const label = String(row.label || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const descText = JSON.stringify(row.desc || row.containerDesc || row.children || {}).toLowerCase();
+      if (label === 'chat messages' || descText.includes('"aria-label":"chat messages"')) {
+        cleaned = true;
+        return;
+      }
+      savedEntries.set(String(row.id), row);
     });
+    if (cleaned) {
+      try { localStorage.setItem(STORE_KEY, JSON.stringify([...savedEntries.values()])); } catch (_) {}
+    }
   }
 
   function actionIdForSingle(desc) {
@@ -4612,6 +4619,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
   function registerSingle(element, shell = null) {
     if (!(element instanceof HTMLElement) || isOwnNode(element) || isProtectedCozyNode(element)) return;
+    if (element.matches?.('[role="log"][aria-label="Chat messages"]') || element.closest?.('[role="log"][aria-label="Chat messages"]')) return;
     if (!(shell instanceof HTMLElement) || isOwnNode(shell) || isProtectedCozyNode(shell)) shell = element;
     const desc = describeElement(element);
     const hideDesc = shell === element ? null : describeElement(shell);
