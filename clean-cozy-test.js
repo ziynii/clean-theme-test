@@ -3665,7 +3665,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   const STORE_KEY = 'zeta-universal-floating-folder-items-v1';
   const POS_KEY = 'zeta-universal-floating-folder-position-v1';
   const HIDDEN_ATTR = 'data-zff-managed-v1';
-  const VERSION = '1.4.0-cozy-sheet';
+  const VERSION = '1.4.1-memory-patch';
   const CHANNEL = 'zeta-floating-folder-v11';
   const IS_OUTER = /(^|\.)zeta-ai\.io$/i.test(location.hostname) && w.top === w;
   const IS_FRAME_WORKER = location.hostname === 'frame.pingpong.ai';
@@ -4172,9 +4172,23 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     return `group:${hashString(children.map(item => descriptorKey(item.desc)).join('|'))}`;
   }
 
+  function isMemoryPatchLauncher(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.id === 'zk-memory-fab') return true;
+    const marker = [
+      element.id,
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.getAttribute('data-tool'),
+      element.getAttribute('data-action'),
+      element.textContent,
+    ].filter(Boolean).join(' ');
+    return /(?:기억\s*패치|memory[-_ ]?patch)/i.test(marker);
+  }
+
   function isPointerTapLauncher(element) {
     if (!(element instanceof HTMLElement)) return false;
-    if (element.id === 'zetakit-floating-launcher') return true;
+    if (element.id === 'zetakit-floating-launcher' || isMemoryPatchLauncher(element)) return true;
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     const compact = rect.width > 0 && rect.height > 0 && rect.width <= 96 && rect.height <= 96;
@@ -4212,9 +4226,14 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
   function buildSingleAction(entry, element, suppliedShell = null) {
     const visual = visualTemplateFrom(element);
-    const shell = suppliedShell instanceof HTMLElement
-      ? suppliedShell
-      : (entry.hideDesc ? resolveDescriptor(entry.hideDesc) : null) || element;
+    // 기억 패치는 FAB 주변 래퍼 안에 메뉴/패널을 함께 마운트할 수 있다.
+    // 래퍼 전체를 숨기면 실행은 되어도 열린 메뉴까지 filter:opacity(0)을 상속받아
+    // 보이지 않을 수 있으므로, 기억 패치는 버튼 자체만 숨긴다.
+    const shell = isMemoryPatchLauncher(element)
+      ? element
+      : (suppliedShell instanceof HTMLElement
+          ? suppliedShell
+          : (entry.hideDesc ? resolveDescriptor(entry.hideDesc) : null) || element);
     const action = {
       id: entry.id,
       kind: 'single',
