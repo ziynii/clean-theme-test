@@ -3665,7 +3665,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   const STORE_KEY = 'zeta-universal-floating-folder-items-v1';
   const POS_KEY = 'zeta-universal-floating-folder-position-v1';
   const HIDDEN_ATTR = 'data-zff-managed-v1';
-  const VERSION = '1.4.3-inpocket-bridge';
+  const VERSION = '1.4.4-safe-bottom-sheet';
   const CHANNEL = 'zeta-floating-folder-v11';
   const IS_OUTER = /(^|\.)zeta-ai\.io$/i.test(location.hostname) && w.top === w;
   const IS_FRAME_WORKER = location.hostname === 'frame.pingpong.ai';
@@ -5014,6 +5014,8 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     open = true;
     managing = false;
     manageButton.hidden = false;
+    panel?.removeAttribute('inert');
+    panel?.setAttribute('aria-hidden', 'false');
     host.classList.add('open');
     launcher.setAttribute('aria-expanded', 'true');
     render();
@@ -5026,6 +5028,8 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     manageButton.hidden = false;
     host?.classList.remove('open', 'managing');
     launcher?.setAttribute('aria-expanded', 'false');
+    panel?.setAttribute('aria-hidden', 'true');
+    panel?.setAttribute('inert', '');
   }
 
   function toast(message) {
@@ -5075,8 +5079,8 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
           border:1px solid var(--cc-tool-line);border-bottom:0;border-radius:20px 20px 0 0;
           background:#FFFFFF;color:var(--cc-tool-text);
           box-shadow:0 -10px 32px rgba(25,29,34,.14);
-          opacity:0;transform:translate(-50%,18px);pointer-events:none;
-          transition:opacity .18s ease,transform .18s ease;
+          opacity:0;visibility:hidden;transform:translate(-50%,18px);pointer-events:none;
+          transition:opacity .18s ease,transform .18s ease,visibility 0s linear .18s;
           padding-bottom:env(safe-area-inset-bottom);
         }
         .panel::before{content:'';display:block;flex:0 0 auto;width:38px;height:4px;margin:10px auto 2px;border-radius:999px;background:#D7D9DD}
@@ -5111,14 +5115,18 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
         .empty{padding:31px 14px 28px;text-align:center;color:#8D9196;font-size:11px;line-height:1.55}.empty strong{display:block;margin-bottom:5px;color:#555A61;font-size:12px}
         .toast{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));max-width:calc(100vw - 24px);padding:9px 13px;border:1px solid rgba(255,255,255,.15);border-radius:999px;background:rgba(45,39,57,.9);color:#fff;font-size:10px;font-weight:700;opacity:0;transform:translate(-50%,7px);transition:.16s ease;pointer-events:none;white-space:nowrap;backdrop-filter:blur(12px)}
         .toast.show{opacity:1;transform:translate(-50%,0)}
-        :host(.open) .scrim{opacity:1;pointer-events:auto}:host(.open) .panel{opacity:1;transform:translate(-50%,0);pointer-events:auto}:host(.open) .launcher{opacity:1;pointer-events:none}
+        :host(:not(.open)) .panel,
+        :host(:not(.open)) .panel *{pointer-events:none!important}
+        :host(.open) .scrim{opacity:1;pointer-events:auto}
+        :host(.open) .panel{opacity:1;visibility:visible;transform:translate(-50%,0);pointer-events:auto;transition-delay:0s}
+        :host(.open) .launcher{opacity:1;pointer-events:none}
         :host(.remote-drag) .launcher{pointer-events:none!important}
         @media(max-width:360px){.panel{width:100%}.grid{gap:7px 5px}.item{min-height:46px;padding:8px 6px}.label{font-size:10px}}
         @media(prefers-reduced-motion:reduce){*{transition:none!important}}
       </style>
 
       <button class="scrim" type="button" aria-label="폴더 닫기"></button>
-      <section class="panel" role="dialog" aria-label="플로팅 도구 폴더">
+      <section class="panel" role="dialog" aria-label="플로팅 도구 폴더" aria-hidden="true" inert>
         <header class="head">
           <div class="head-icon">📁</div>
           <div class="titles"><div class="title">도구</div><div class="sub">드래그해서 정리</div></div>
