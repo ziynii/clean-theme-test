@@ -3665,8 +3665,9 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   const STORE_KEY = 'zeta-universal-floating-folder-items-v1';
   const POS_KEY = 'zeta-universal-floating-folder-position-v1';
   const HIDDEN_ATTR = 'data-zff-managed-v1';
-  const VERSION = '1.4.1-memory-patch';
+  const VERSION = '1.4.2-memory-reset-once';
   const CHANNEL = 'zeta-floating-folder-v11';
+  const MEMORY_RESET_KEY = 'zeta-universal-floating-folder-memory-reset-v71';
   const IS_OUTER = /(^|\.)zeta-ai\.io$/i.test(location.hostname) && w.top === w;
   const IS_FRAME_WORKER = location.hostname === 'frame.pingpong.ai';
   const remoteActions = new Map();
@@ -4153,12 +4154,35 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     notifyOuter();
   }
 
+  function isLegacyMemoryPatchEntry(row) {
+    if (!row || typeof row !== 'object') return false;
+    let text = '';
+    try { text = JSON.stringify(row); } catch (_) {}
+    return /(?:zk-memory-fab|기억\s*패치|memory[-_ ]?patch)/i.test(text);
+  }
+
   function loadSaved() {
     let rows = [];
     try {
       const parsed = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
       if (Array.isArray(parsed)) rows = parsed;
     } catch (_) {}
+
+    // v71 one-time migration: v69/v70 may have persisted a memory-patch entry
+    // whose descriptor was captured before the compatibility fix. That stale entry
+    // makes the FAB disappear immediately on startup, so remove ONLY that old entry
+    // once. A memory patch dragged into the folder again after this migration is kept.
+    try {
+      if (localStorage.getItem(MEMORY_RESET_KEY) !== '1') {
+        const filtered = rows.filter(row => !isLegacyMemoryPatchEntry(row));
+        if (filtered.length !== rows.length) {
+          rows = filtered;
+          localStorage.setItem(STORE_KEY, JSON.stringify(rows));
+        }
+        localStorage.setItem(MEMORY_RESET_KEY, '1');
+      }
+    } catch (_) {}
+
     rows.forEach(row => {
       if (row?.id && (row.kind === 'single' || row.kind === 'group')) savedEntries.set(String(row.id), row);
     });
