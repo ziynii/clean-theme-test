@@ -3665,7 +3665,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   const STORE_KEY = 'zeta-universal-floating-folder-items-v1';
   const POS_KEY = 'zeta-universal-floating-folder-position-v1';
   const HIDDEN_ATTR = 'data-zff-managed-v1';
-  const VERSION = '1.4.2-memory-patch-bridge';
+  const VERSION = '1.4.3-inpocket-bridge';
   const CHANNEL = 'zeta-floating-folder-v11';
   const IS_OUTER = /(^|\.)zeta-ai\.io$/i.test(location.hostname) && w.top === w;
   const IS_FRAME_WORKER = location.hostname === 'frame.pingpong.ai';
@@ -4224,6 +4224,41 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     else element.click();
   }
 
+  function isInPocketLauncher(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    const owner = element.closest?.(
+      '[id*="inpocket" i],[class*="inpocket" i],[data-inpocket],[data-tool*="inpocket" i],[data-action*="inpocket" i]'
+    );
+    const marker = [
+      element.id,
+      typeof element.className === 'string' ? element.className : '',
+      element.getAttribute('aria-label'),
+      element.getAttribute('title'),
+      element.getAttribute('data-inpocket'),
+      element.getAttribute('data-tool'),
+      element.getAttribute('data-action'),
+      owner?.id,
+      typeof owner?.className === 'string' ? owner.className : '',
+      element.textContent,
+    ].filter(Boolean).join(' ');
+    return !!owner || /in\s*pocket|inpocket/i.test(marker);
+  }
+
+  function runInPocketFromFolder(current) {
+    // The loader supplied by the user opens inPocket through this public
+    // controller, so use the same entry point when reopening from our folder.
+    try {
+      const api = w.__INPOCKET__;
+      if (api && typeof api.open === 'function') {
+        api.open();
+        return;
+      }
+    } catch (_) {}
+
+    // Fallback only if the controller is unavailable.
+    activateOriginalElement(current);
+  }
+
   function memoryPatchOpenSignal(element, baseline) {
     if (!(element instanceof HTMLElement) || !element.isConnected) return false;
     const expanded = element.getAttribute('aria-expanded');
@@ -4359,6 +4394,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
         const current = element?.isConnected ? element : resolveDescriptor(entry.desc);
         if (!(current instanceof HTMLElement)) throw new Error('원본 도구를 찾지 못했습니다.');
         if (isMemoryPatchLauncher(current)) runMemoryPatchFromFolder(current, shell);
+        else if (isInPocketLauncher(current)) runInPocketFromFolder(current);
         else activateOriginalElement(current);
       }
     };
@@ -4377,7 +4413,8 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
         run() {
           const current = element?.isConnected ? element : resolveDescriptor(saved.desc);
           if (!(current instanceof HTMLElement)) throw new Error('원본 하위 버튼을 찾지 못했습니다.');
-          activateOriginalElement(current);
+          if (isInPocketLauncher(current)) runInPocketFromFolder(current);
+          else activateOriginalElement(current);
         }
       };
     });
