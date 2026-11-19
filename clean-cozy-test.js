@@ -1723,6 +1723,61 @@ html.cc-avatar-user-hidden [data-sentry-component="RightTextContent"] > div{marg
  border-radius:7px!important;
  font-size:11px!important;
 }
+#cc-panel .cc-action.cc-help-open{
+ grid-column:1/-1!important;
+ display:flex!important;align-items:center!important;justify-content:center!important;gap:6px!important;
+ font-weight:650!important;
+}
+#cc-panel .cc-action.cc-help-open .cc-help-open-icon{
+ font-size:13px!important;line-height:1!important;color:var(--cc-accent-strong)!important;
+}
+#cc-help-backdrop{
+ position:fixed!important;inset:0!important;z-index:2147483646!important;
+ background:rgba(24,27,31,.18)!important;
+}
+#cc-help-backdrop[hidden],#cc-help-dialog[hidden]{display:none!important}
+#cc-help-dialog{
+ position:fixed!important;z-index:2147483647!important;
+ left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important;
+ width:min(330px,calc(100vw - 28px))!important;max-height:min(78dvh,570px)!important;
+ overflow:auto!important;padding:12px!important;
+ border:1px solid var(--cc-stroke)!important;border-radius:16px!important;
+ background:#FFFFFF!important;color:var(--cc-text)!important;
+ box-shadow:0 14px 42px rgba(25,29,34,.18)!important;
+ font-family:-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif!important;
+}
+#cc-help-dialog .cc-help-head{
+ display:flex!important;align-items:center!important;gap:8px!important;
+ padding:1px 1px 10px!important;border-bottom:1px solid var(--cc-stroke)!important;
+}
+#cc-help-dialog .cc-help-title{flex:1!important;font-size:14px!important;font-weight:750!important;letter-spacing:-.02em!important}
+#cc-help-dialog .cc-help-close{
+ width:29px!important;height:29px!important;padding:0!important;border:1px solid #ECEDEE!important;
+ border-radius:9px!important;background:#FAFAFA!important;color:#70757A!important;
+ font:17px/1 sans-serif!important;cursor:pointer!important;
+}
+#cc-help-dialog .cc-help-body{display:flex!important;flex-direction:column!important;gap:8px!important;padding-top:10px!important}
+#cc-help-dialog .cc-help-card{
+ padding:10px 11px!important;border:1px solid #ECEDEE!important;border-radius:12px!important;background:#FAFAFA!important;
+}
+#cc-help-dialog .cc-help-card-title{
+ display:flex!important;align-items:center!important;gap:7px!important;
+ margin-bottom:6px!important;color:#34383C!important;font-size:12px!important;font-weight:750!important;
+}
+#cc-help-dialog .cc-help-card-title .cc-help-icon{
+ display:grid!important;place-items:center!important;width:22px!important;height:22px!important;flex:0 0 22px!important;
+ border-radius:7px!important;background:var(--cc-accent-soft)!important;color:var(--cc-accent-strong)!important;
+ font-size:12px!important;line-height:1!important;
+}
+#cc-help-dialog .cc-help-lines{display:flex!important;flex-direction:column!important;gap:5px!important}
+#cc-help-dialog .cc-help-line{
+ display:flex!important;align-items:flex-start!important;gap:6px!important;
+ color:#656A70!important;font-size:11px!important;line-height:1.5!important;letter-spacing:-.01em!important;
+}
+#cc-help-dialog .cc-help-dot{flex:0 0 auto!important;color:var(--cc-accent-strong)!important;font-weight:800!important}
+#cc-help-dialog .cc-help-key{
+ flex:0 0 auto!important;min-width:54px!important;color:#41464C!important;font-weight:700!important;
+}
 
 /* One consistent inline text highlight on desktop and mobile.
    Dialogue-only spans sit with the text, so there is no overlay or scrolling lag. */
@@ -3549,7 +3604,66 @@ function makeControls(){
  captureButton.addEventListener('click',()=>setCaptureMode(!captureMode));
  list.appendChild(captureButton);
  updateCaptureButton();
+ const helpButton=document.createElement('button');
+ helpButton.className='cc-action cc-help-open';
+ helpButton.type='button';
+ helpButton.innerHTML='<span class="cc-help-open-icon" aria-hidden="true">ⓘ</span><span>사용방법</span>';
+ list.appendChild(helpButton);
  panel.appendChild(list);
+
+ const helpBackdrop=document.createElement('div');
+ helpBackdrop.id='cc-help-backdrop';
+ helpBackdrop.hidden=true;
+ helpBackdrop.setAttribute('aria-hidden','true');
+
+ const helpDialog=document.createElement('div');
+ helpDialog.id='cc-help-dialog';
+ helpDialog.hidden=true;
+ helpDialog.setAttribute('role','dialog');
+ helpDialog.setAttribute('aria-modal','true');
+ helpDialog.setAttribute('aria-label','클린 코지 사용방법');
+ helpDialog.innerHTML=`
+  <div class="cc-help-head">
+   <div class="cc-help-title">사용방법</div>
+   <button class="cc-help-close" type="button" aria-label="사용방법 닫기">×</button>
+  </div>
+  <div class="cc-help-body">
+   <section class="cc-help-card">
+    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true">🧰</span><span>도구모음</span></div>
+    <div class="cc-help-lines">
+     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>플로팅 버튼을 드래그하면 도구모음에 넣을 수 있어요.</span></div>
+     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>호환 확인된 기능: 제타킷 · inPocket · 캡쳐</span></div>
+    </div>
+   </section>
+   <section class="cc-help-card">
+    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true">📸</span><span>캡쳐모드</span></div>
+    <div class="cc-help-lines">
+     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>캡쳐하고 싶은 곳에서 캡쳐모드를 실행해 주세요.</span></div>
+     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>실행한 곳부터 스크롤 방향으로 약 5턴까지 사용할 수 있어요.</span></div>
+    </div>
+   </section>
+   <section class="cc-help-card">
+    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true">↵</span><span>줄바꿈 정리</span></div>
+    <div class="cc-help-lines">
+     <div class="cc-help-line"><span class="cc-help-key">짧은 출력</span><span>줄바꿈을 짧게 정리해요.</span></div>
+     <div class="cc-help-line"><span class="cc-help-key">긴 출력</span><span>줄바꿈을 길게 정리해요.</span></div>
+     <div class="cc-help-line"><span class="cc-help-key">나레이션</span><span>나레이션 삭제를 켜면 나레이션을 제외하고 정리해요.</span></div>
+    </div>
+   </section>
+  </div>`;
+
+ const setHelpOpen=(open)=>{
+  if(!helpBackdrop.isConnected)document.body.appendChild(helpBackdrop);
+  if(!helpDialog.isConnected)document.body.appendChild(helpDialog);
+  helpBackdrop.hidden=!open;
+  helpDialog.hidden=!open;
+  helpBackdrop.setAttribute('aria-hidden',String(!open));
+  helpDialog.setAttribute('aria-hidden',String(!open));
+  if(open)helpDialog.querySelector('.cc-help-close')?.focus({preventScroll:true});
+ };
+ helpButton.addEventListener('click',()=>setHelpOpen(true));
+ helpBackdrop.addEventListener('click',()=>setHelpOpen(false));
+ helpDialog.querySelector('.cc-help-close').addEventListener('click',()=>setHelpOpen(false));
  // The scene's floating layers can override CSS visibility. Keep the settings
  // panel open/closed state explicit, and move it into view before rendering.
  const setSettingsOpen=(open)=>{
@@ -3573,6 +3687,7 @@ function makeControls(){
    panel.style.removeProperty('visibility');
    panel.style.removeProperty('opacity');
    panel.style.removeProperty('pointer-events');
+   setHelpOpen(false);
   }
  };
  toggle.setAttribute('aria-haspopup','dialog');
@@ -3587,7 +3702,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
