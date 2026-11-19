@@ -1769,6 +1769,11 @@ html.cc-avatar-user-hidden [data-sentry-component="RightTextContent"] > div{marg
  border-radius:7px!important;background:var(--cc-accent-soft)!important;color:var(--cc-accent-strong)!important;
  font-size:12px!important;line-height:1!important;
 }
+#cc-help-dialog .cc-help-card-title .cc-help-icon svg{
+ width:14px!important;height:14px!important;display:block!important;
+ fill:none!important;stroke:currentColor!important;stroke-width:1.7!important;
+ stroke-linecap:round!important;stroke-linejoin:round!important;
+}
 #cc-help-dialog .cc-help-lines{display:flex!important;flex-direction:column!important;gap:5px!important}
 #cc-help-dialog .cc-help-line{
  display:flex!important;align-items:flex-start!important;gap:6px!important;
@@ -3632,21 +3637,21 @@ function makeControls(){
   </div>
   <div class="cc-help-body">
    <section class="cc-help-card">
-    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true">🧰</span><span>도구모음</span></div>
+    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7.5Z"/><path d="M3.5 10h17"/></svg></span><span>도구모음</span></div>
     <div class="cc-help-lines">
      <div class="cc-help-line"><span class="cc-help-dot">•</span><span>플로팅 버튼을 드래그하면 도구모음에 넣을 수 있어요.</span></div>
      <div class="cc-help-line"><span class="cc-help-dot">•</span><span>호환 확인된 기능: 제타킷 · inPocket · 캡쳐</span></div>
     </div>
    </section>
    <section class="cc-help-card">
-    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true">📸</span><span>캡쳐모드</span></div>
+    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4.5 7.5h3l1.5-2h6l1.5 2h3a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V9a1.5 1.5 0 0 1 1.5-1.5Z"/><circle cx="12" cy="13" r="3.5"/></svg></span><span>캡쳐모드</span></div>
     <div class="cc-help-lines">
      <div class="cc-help-line"><span class="cc-help-dot">•</span><span>캡쳐하고 싶은 곳에서 캡쳐모드를 실행해 주세요.</span></div>
      <div class="cc-help-line"><span class="cc-help-dot">•</span><span>실행한 곳부터 스크롤 방향으로 약 5턴까지 사용할 수 있어요.</span></div>
     </div>
    </section>
    <section class="cc-help-card">
-    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true">↵</span><span>줄바꿈 정리</span></div>
+    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 11h11M4 16h16M4 21h9"/></svg></span><span>줄바꿈 정리</span></div>
     <div class="cc-help-lines">
      <div class="cc-help-line"><span class="cc-help-key">짧은 출력</span><span>줄바꿈을 짧게 정리해요.</span></div>
      <div class="cc-help-line"><span class="cc-help-key">긴 출력</span><span>줄바꿈을 길게 정리해요.</span></div>
