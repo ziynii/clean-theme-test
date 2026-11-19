@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      86.0-integrated
+// @version      88.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -296,7 +296,10 @@ function updateMobPersonAvatar(body){
   (FRAME_CHAT?frameNameLabel(body)?.textContent?.trim():'')||'';
  const main=ccMainCharacterName();
  const norm=v=>String(v||'').replace(/\s+/g,' ').trim();
- const isMob=Boolean(speaker&&main&&norm(speaker)!==norm(main));
+ // 캡쳐모드에서는 메인 캐릭터 이름이 {{char}}로 치환된다.
+ // {{char}}를 모브로 오인해 가짜 하트 아바타를 하나 더 만들지 않는다.
+ const captureMain = captureMode && norm(speaker)==='{{char}}';
+ const isMob=Boolean(speaker&&main&&!captureMain&&norm(speaker)!==norm(main));
  let fake=body.querySelector(':scope > .cc-mob-person-avatar');
  const nativeAvatar=[...body.children].find(el=>el instanceof HTMLElement&&el.tagName==='BUTTON')||null;
 
@@ -3491,6 +3494,37 @@ function unbindCaptureScroll(){
 function restoreCaptureMode(){
  for(const node of [...captureNodes])restoreCaptureNode(node);
 }
+function restoreCapturePlaceholders(){
+ const charName=captureIdentity.charNames.find(name=>name&&name!=='{{char}}')||'';
+ const userName=captureIdentity.userNames.find(name=>name&&name!=='{{user}}')||'';
+ const roots=[];
+ const log=captureLog();
+ if(log)roots.push(log);
+ const header=document.querySelector('[data-testid="chat-header-profile"]');
+ if(header)roots.push(header);
+
+ for(const root of roots){
+  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+  let node;
+  while((node=walker.nextNode())){
+   if(!captureNodeAllowed(node))continue;
+   let value=node.nodeValue||'';
+   let restored=value;
+   if(charName)restored=restored.replace(/\{\{char\}\}/g,charName);
+   if(userName)restored=restored.replace(/\{\{user\}\}/g,userName);
+   if(restored!==value)node.nodeValue=restored;
+  }
+ }
+}
+function reconcileAvatarsAfterCapture(){
+ // Remove every temporary mob decoration first, then rebuild only genuine mob rows.
+ document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());
+ document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));
+ document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));
+ for(const body of document.querySelectorAll('[data-sentry-component="LeftTextContent"]')){
+  updateMobPersonAvatar(body);
+ }
+}
 function updateCaptureButton(){
  if(!captureButton)return;
  captureButton.classList.toggle('cc-capture-active',captureMode);
@@ -3525,6 +3559,10 @@ function setCaptureMode(enabled){
   captureMode=false;
   unbindCaptureScroll();
   restoreCaptureMode();
+  // React may have recycled text nodes while capture mode was active.
+  // Restore any remaining placeholders before throwing away the remembered identities.
+  restoreCapturePlaceholders();
+  reconcileAvatarsAfterCapture();
   captureAllowedTurns.clear();
   captureSeenTurns.up.clear();
   captureSeenTurns.down.clear();
@@ -3843,7 +3881,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();restoreCapturePlaceholders();reconcileAvatarsAfterCapture();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
