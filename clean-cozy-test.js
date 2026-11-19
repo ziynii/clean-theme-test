@@ -4919,21 +4919,21 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
         .content{min-height:0;overflow:auto;padding:13px 14px 17px;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
         .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
         .item{
-          position:relative;min-width:0;min-height:84px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;
-          padding:9px 5px 8px;border:1px solid #ECEDEE;border-radius:13px;background:var(--cc-tool-card);cursor:pointer;outline:none;pointer-events:auto;
+          position:relative;min-width:0;min-height:48px;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:6px;
+          padding:9px 8px;border:1px solid #ECEDEE;border-radius:12px;background:var(--cc-tool-card);cursor:pointer;outline:none;pointer-events:auto;
           transition:transform .12s ease,background .12s ease,border-color .12s ease;
         }
         .item:hover{background:var(--cc-tool-card-hover)}.item:active{transform:scale(.96);background:#F0F0F1}
         .item:focus-visible{box-shadow:0 0 0 3px rgba(126,106,156,.13);border-color:#D9D1E5}
-        .visual{width:38px;height:38px;display:flex;align-items:center;justify-content:center;overflow:hidden;pointer-events:none}
-        .visual>*{max-width:38px!important;max-height:38px!important;flex:none!important}
+        .visual{width:20px;height:20px;flex:0 0 20px;display:flex;align-items:center;justify-content:center;overflow:visible;pointer-events:none}
+        .visual>*{max-width:20px!important;max-height:20px!important;flex:none!important}
         .semantic-icon,.fallback-icon{
-          width:38px;height:38px;display:grid;place-items:center;border-radius:11px;
-          background:#FFFFFF;border:1px solid #E6E7E8;box-shadow:none;color:var(--cc-tool-accent);
+          width:20px;height:20px;display:grid;place-items:center;border-radius:0;
+          background:transparent;border:0;box-shadow:none;color:var(--cc-tool-accent);
         }
-        .semantic-icon svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-        .fallback-icon{font-size:17px}
-        .label{width:100%;min-height:25px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;text-align:center;font-size:10px;font-weight:650;line-height:1.25;color:#4F5358;letter-spacing:-.015em}
+        .semantic-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+        .fallback-icon{font-size:15px}
+        .label{min-width:0;width:auto;min-height:0;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:10.5px;font-weight:650;line-height:1.2;color:#4F5358;letter-spacing:-.015em}
         .remove{position:absolute;right:3px;top:3px;width:20px;height:20px;padding:0;display:none;place-items:center;border:2px solid #FAFAFA;border-radius:999px;background:#E66B73;color:#fff;font-size:13px;font-weight:900;line-height:1;box-shadow:0 2px 6px rgba(40,40,40,.12);pointer-events:auto;cursor:pointer}
         :host(.managing) .item{opacity:.62;pointer-events:none}:host(.managing) .remove{display:grid;pointer-events:auto}
         .back{width:100%;height:36px;margin:0 0 10px;padding:0 11px;border-radius:10px;display:flex;align-items:center;gap:7px;text-align:left;font-size:11px;color:#5A5F65}
@@ -4943,7 +4943,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
         .toast.show{opacity:1;transform:translate(-50%,0)}
         :host(.open) .scrim{opacity:1;pointer-events:auto}:host(.open) .panel{opacity:1;transform:translate(-50%,0);pointer-events:auto}:host(.open) .launcher{opacity:1;pointer-events:none}
         :host(.remote-drag) .launcher{pointer-events:none!important}
-        @media(max-width:360px){.panel{width:100%}.grid{gap:7px 5px}.item{min-height:78px}}
+        @media(max-width:360px){.panel{width:100%}.grid{gap:7px 5px}.item{min-height:46px;padding:8px 6px}.label{font-size:10px}}
         @media(prefers-reduced-motion:reduce){*{transition:none!important}}
       </style>
 
