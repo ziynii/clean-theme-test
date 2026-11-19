@@ -498,7 +498,20 @@ a[testid^="room-list-item-"] span.body1{color:#25272A!important;-webkit-text-fil
   [data-sentry-component="ChatBubbleContainer"] .chat p{font-size:14px!important;}
 }
 /* Hide native shortcuts only while the theme's settings menu can forward clicks */
-html.cc-tools-ready [data-sentry-component="LastMessageControlBar"]{display:none!important;}
+/* ZETAKIT compatibility: keep the native action bar alive in rendered DOM.
+   Move it out of normal layout instead of display:none so third-party DOM tools
+   can still discover the original Edit/Report/Regenerate buttons. */
+html.cc-tools-ready [data-sentry-component="LastMessageControlBar"]{
+  position:fixed!important;
+  left:8px!important;
+  bottom:8px!important;
+  right:auto!important;
+  top:auto!important;
+  opacity:0!important;
+  pointer-events:none!important;
+  user-select:none!important;
+  z-index:-1!important;
+}
 html.cc-tools-ready [data-sentry-component="QuickReplyButton"]{display:none!important;}
 #cc-panel{width:255px!important;max-width:calc(100vw - 24px)!important;max-height:min(68vh,470px)!important;overflow:auto!important;}
 #cc-panel .cc-section-title{font-size:11px;font-weight:600;color:#8D9196;letter-spacing:.02em;margin:12px 0 6px;}
