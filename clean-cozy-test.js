@@ -2286,7 +2286,7 @@ if(FRAME_CHAT)style.textContent+=`
    cannot overwrite it. This reserves space only inside the chat log. */
 @media (max-width:700px){
   body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]{
-    padding-right:56px!important;
+    padding-right:40px!important;
     box-sizing:border-box!important;
   }
 
@@ -3759,6 +3759,7 @@ function schedule(){
  scheduled=true;
  requestAnimationFrame(()=>{
   scheduled=false;
+  if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
   markFrameChatRoot();
   finishPendingLineEdit();
   enhance();
@@ -4087,6 +4088,7 @@ function ccStartRuntimeOnce(){
  ccBootstrapObserver?.disconnect();
  ccBootstrapObserver=null;
 
+ if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
  markFrameChatRoot();
  applyOpts();
 
@@ -4108,7 +4110,7 @@ function ccStartRuntimeOnce(){
  announceFrameControls(true);
 
  observer=new MutationObserver(schedule);
- observer.observe(document.body,{childList:true,subtree:true});
+ observer.observe(document.documentElement,{childList:true,subtree:true});
 
  dateRefreshTimer=setInterval(()=>{
   markFrameChatRoot();
@@ -4123,14 +4125,14 @@ if(FRAME_CHAT){
   ccBootstrapObserver=new MutationObserver(()=>{
    if(ccHasEssentialChatDOM())ccStartRuntimeOnce();
   });
-  ccBootstrapObserver.observe(document.body,{childList:true,subtree:true});
+  ccBootstrapObserver.observe(document.documentElement,{childList:true,subtree:true});
  }
 }else{
  // Outer page: keep theme/site coordination, but never create chat floating controls.
  applyOpts();
  resetTurnRoom();
  observer=new MutationObserver(schedule);
- observer.observe(document.body,{childList:true,subtree:true});
+ observer.observe(document.documentElement,{childList:true,subtree:true});
  dateRefreshTimer=setInterval(()=>{
   if(document.querySelector('.cc-meta-date'))schedule();
  },60000);
