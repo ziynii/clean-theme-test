@@ -665,6 +665,7 @@ html.cc-tools-ready [data-sentry-component="QuickReplyButton"]{display:none!impo
  -webkit-box-decoration-break:clone!important;
 }
 .cc-capture-token>.cc-capture-source{
+ visibility:hidden!important;
  color:transparent!important;
  -webkit-text-fill-color:transparent!important;
  text-shadow:none!important;
