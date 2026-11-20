@@ -5940,6 +5940,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   let observer = null;
   let refreshTimer = 0;
   let accentTimer = 0;
+  let paintTimer = 0;
   let frameAccent = null;
   let pos = null;
   let userMoved = false;
@@ -6447,7 +6448,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     }, { passive: true });
 
     // Theme/bubble color may change without recreating the bar.
-    w.setInterval(() => {
+    paintTimer = w.setInterval(() => {
       if (barEl?.isConnected && visible(barEl)) paintBar(barEl);
     }, 1200);
   }
@@ -6456,6 +6457,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     stopped = true;
     clearTimeout(refreshTimer);
     clearInterval(accentTimer);
+    clearInterval(paintTimer);
     observer?.disconnect();
     pendingStore.clear();
 
