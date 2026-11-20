@@ -314,14 +314,10 @@ function updateMobPersonAvatar(body){
   )
  );
 
- // During capture, {{char}} is still a known character placeholder.
- // Never turn it into a mob heart merely because its visible name changed.
- const captureKnownCharacter=captureMode&&speaker.trim()==='{{char}}';
-
  // Mob rule:
  // - real Zeta profile image => registered plot character, preserve it
  // - no real profile image + named speaker => temporary/generated speaker, use heart
- const isMob=Boolean(speaker&&!captureKnownCharacter&&!hasRegisteredProfile);
+ const isMob=Boolean(speaker&&!hasRegisteredProfile);
 
  if(!isMob){
   fake?.remove();
@@ -650,13 +646,6 @@ html.cc-tools-ready [data-sentry-component="QuickReplyButton"]{display:none!impo
   background:#FAFAFA;color:#33363A;font:12px/1.25 sans-serif;text-align:center;cursor:pointer;}
 #cc-panel .cc-action:disabled{color:#B4B6B9;cursor:not-allowed;opacity:.65;}
 #cc-panel .cc-action:not(:disabled):active{background:#EDEEEF;}
-#cc-panel .cc-action.cc-capture-active{
- background:var(--cc-user)!important;
- border-color:var(--cc-accent)!important;
- color:var(--cc-accent-strong)!important;
- font-weight:600!important;
-}
-
 #cc-panel .cc-help{color:#898C90;font-size:11px;line-height:1.4;margin-top:10px}
 #cc-toggle{left:auto!important;right:12px;bottom:128px;}
 #cc-panel{left:auto!important;right:12px;bottom:171px;}
@@ -3280,453 +3269,6 @@ function pressLineTool(){
  lineEditOpenTimer=setTimeout(()=>{finishPendingLineEdit();lineEditPending=false;lineEditOpenTimer=null;},750);
 }
 
-/* V65 capture mode — mask only the activation view and up to 5 newly reached turns
-   in each scroll direction. Local DOM text only; no Zeta API and no message persistence. */
-let captureMode=false;
-let captureButton=null;
-let captureIdentity={charNames:[],userNames:[]};
-const captureOriginals=new WeakMap();
-const captureNodes=new Set();
-/* React can replace masked text nodes while capture mode is active.
-   Keep an exact per-row snapshot so fresh {{char}}/{{user}} nodes can still
-   be restored to the original spelling (e.g. 설기 / 지연), not guessed. */
-const captureRowSnapshots=new Map();
-const captureAllowedTurns=new Set();
-const captureSeenTurns={up:new Set(),down:new Set()};
-let captureScrollRoot=null;
-let captureLastScrollTop=0;
-let captureScrollDirection=null;
-let captureScrollRAF=0;
-const CAPTURE_TURN_LIMIT=5;
-const CAPTURE_SCROLL_THRESHOLD=8;
-
-function captureValidName(value){
- const name=String(value||'').trim();
- return !!(
-  name &&
-  name!=='유저' &&
-  name!=='캐릭터' &&
-  name!=='{{user}}' &&
-  name!=='{{char}}' &&
-  !/^#[0-9a-f]{3,8}$/i.test(name)
- );
-}
-function captureCharacterIdentity(){
- const left=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="LeftTextContent"]');
- const header=document.querySelector('[data-testid="chat-header-profile"] span')?.textContent?.trim()||'';
- const candidates=[
-  left?.querySelector(':scope > button img[alt]')?.getAttribute('alt')?.trim(),
-  left?.querySelector('.cc-meta-name')?.textContent?.trim(),
-  left?.querySelector('.caption1')?.textContent?.trim(),
-  FRAME_CHAT&&left?frameName(left):'',
-  header
- ].filter(captureValidName);
- const full=candidates[0]||'';
- const aliases=new Set(candidates);
- if(/^[가-힣]{3,}$/.test(full))aliases.add(full.slice(-2));
- return [...aliases].filter(captureValidName).sort((a,b)=>b.length-a.length);
-}
-/* capture alias: 3글자 이상 한글 유저명은 뒤 2글자도 {{user}}로 가림 */
-function captureUserIdentity(){
- const right=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="RightTextContent"]');
- const candidates=[
-  right?.querySelector(':scope > button img[alt]')?.getAttribute('alt')?.trim(),
-  right?.querySelector('.cc-meta-name')?.textContent?.trim(),
-  right?.querySelector('.caption1')?.textContent?.trim(),
-  FRAME_CHAT&&right?frameName(right):''
- ].filter(captureValidName);
- const full=candidates[0]||'';
- const aliases=new Set(candidates);
- if(/^[가-힣]{3,}$/.test(full))aliases.add(full.slice(-2));
- return [...aliases].filter(captureValidName).sort((a,b)=>b.length-a.length);
-}
-function escapeCaptureRegExp(value){
- return value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-}
-function replaceCaptureNames(value){
- let output=String(value||'');
- const replacements=[
-  ...captureIdentity.charNames.map(name=>[name,'{{char}}']),
-  ...captureIdentity.userNames.map(name=>[name,'{{user}}'])
- ].sort((a,b)=>b[0].length-a[0].length);
- for(const [name,replacement] of replacements){
-  if(!name||name===replacement)continue;
-  output=output.replace(new RegExp(escapeCaptureRegExp(name),'g'),replacement);
- }
- return output;
-}
-function captureNodeAllowed(node){
- const parent=node?.parentElement;
- if(!parent)return false;
- if(parent.closest('#cc-panel,#cc-settings-backdrop,#cc-toggle,#cc-edit-shortcut,#cc-line-shortcut'))return false;
- if(parent.closest('textarea,input,[contenteditable="true"],script,style'))return false;
- return true;
-}
-function captureLog(){
- return document.querySelector('[role="log"][aria-label="Chat messages"]');
-}
-function captureTurnKey(turn,index){
- const user=turn.rows.find(row=>row.matches('[data-sentry-component="RightTextContent"]'));
- const first=turn.rows[0];
- const key=(user&&scopedKey(user))||(first&&scopedKey(first));
- return key||('capture-dom-'+index);
-}
-function captureTurns(){
- const log=captureLog();
- if(!log)return [];
- const rows=[...log.querySelectorAll(':scope [data-sentry-component="RightTextContent"],:scope [data-sentry-component="LeftTextContent"]')];
- const turns=[];
- let current=null;
- for(const row of rows){
-  const isUser=row.matches('[data-sentry-component="RightTextContent"]');
-  if(isUser||!current){
-   current={rows:[]};
-   turns.push(current);
-  }
-  current.rows.push(row);
- }
- turns.forEach((turn,index)=>turn.key=captureTurnKey(turn,index));
- return turns;
-}
-function captureViewportRect(){
- const log=captureLog();
- if(!log)return {top:0,bottom:innerHeight};
- const rect=log.getBoundingClientRect();
- return {
-  top:Math.max(0,rect.top),
-  bottom:Math.min(innerHeight,rect.bottom)
- };
-}
-function captureVisibleTurns(turns){
- const viewport=captureViewportRect();
- return turns.filter(turn=>turn.rows.some(row=>{
-  const rect=row.getBoundingClientRect();
-  return rect.bottom>viewport.top+2 && rect.top<viewport.bottom-2;
- }));
-}
-function captureRowSnapshotKey(row){
- if(!(row instanceof HTMLElement))return '';
- const side=row.matches('[data-sentry-component="RightTextContent"]')?'u':'c';
- const indexed=row.closest('[data-index]');
- const index=indexed?.getAttribute('data-index');
- // Only use Zeta's rendered stable index. Never fall back to visual row position:
- // React can insert/recycle rows and make pos-based restoration hit a different message.
- return (index!==null&&index!==undefined&&index!=='')?side+':idx:'+index:'';
-}
-function captureNameTokens(value){
- const source=String(value||'');
- const names=[
-  ...captureIdentity.charNames.map(name=>({name,placeholder:'{{char}}'})),
-  ...captureIdentity.userNames.map(name=>({name,placeholder:'{{user}}'}))
- ].filter(item=>item.name&&item.name!==item.placeholder)
-  .sort((a,b)=>b.name.length-a.name.length);
-
- const tokens=[];
- let i=0;
- while(i<source.length){
-  let hit=null;
-  for(const item of names){
-   if(source.startsWith(item.name,i)){hit=item;break;}
-  }
-  if(hit){
-   tokens.push({placeholder:hit.placeholder,original:hit.name});
-   i+=hit.name.length;
-  }else{
-   i+=1;
-  }
- }
- return tokens;
-}
-function rememberCaptureRowSnapshot(row){
- const key=captureRowSnapshotKey(row);
- if(!key||captureRowSnapshots.has(key))return;
- const entries=[];
- const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
- let node;
- while((node=walker.nextNode())){
-  if(!captureNodeAllowed(node))continue;
-  const original=node.nodeValue||'';
-  const masked=replaceCaptureNames(original);
-  if(masked!==original)entries.push({original,masked,tokens:captureNameTokens(original)});
- }
- if(entries.length)captureRowSnapshots.set(key,entries);
-}
-function restoreCaptureRowSnapshots(){
- const log=captureLog();
- if(!log)return;
- const rows=[...log.querySelectorAll(
-  '[data-sentry-component="RightTextContent"],[data-sentry-component="LeftTextContent"]'
- )];
- for(const row of rows){
-  const key=captureRowSnapshotKey(row);
-  const saved=key?captureRowSnapshots.get(key):null;
-  if(!saved?.length)continue;
-
-  const currentNodes=[];
-  const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
-  let node;
-  while((node=walker.nextNode())){
-   if(!captureNodeAllowed(node))continue;
-   const value=node.nodeValue||'';
-   if(value.includes('{{char}}')||value.includes('{{user}}'))currentNodes.push(node);
-  }
-  if(!currentNodes.length)continue;
-
-  const unused=saved.map((entry,index)=>({entry,index,used:false}));
-
-  // Pass 1: exact whole-node restoration when React kept the same text shape.
-  for(const currentNode of currentNodes){
-   const value=currentNode.nodeValue||'';
-   const hit=unused.find(item=>!item.used&&item.entry.masked===value);
-   if(hit){
-    currentNode.nodeValue=hit.entry.original;
-    hit.used=true;
-   }
-  }
-
-  // Pass 2: React/markdown may split or merge text nodes. For placeholders that
-  // remain, restore ONLY the placeholder token itself, never the whole sentence.
-  // Tokens come only from unused snapshots of this same stable data-index row.
-  const tokenQueue=unused
-   .filter(item=>!item.used)
-   .flatMap(item=>Array.isArray(item.entry.tokens)?item.entry.tokens:[]);
-
-  if(tokenQueue.length){
-   let tokenPos=0;
-   const walker2=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
-   let node2;
-   while((node2=walker2.nextNode())){
-    if(!captureNodeAllowed(node2))continue;
-    let value=node2.nodeValue||'';
-    if(!value.includes('{{char}}')&&!value.includes('{{user}}'))continue;
-
-    value=value.replace(/\{\{char\}\}|\{\{user\}\}/g,(placeholder)=>{
-     for(let i=tokenPos;i<tokenQueue.length;i++){
-      const token=tokenQueue[i];
-      if(token.placeholder!==placeholder)continue;
-      tokenPos=i+1;
-      return token.original;
-     }
-     return placeholder;
-    });
-    node2.nodeValue=value;
-   }
-  }
- }
-}
-function maskCaptureRow(row){
- rememberCaptureRowSnapshot(row);
- const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
- let node;
- while((node=walker.nextNode())){
-  if(!captureNodeAllowed(node))continue;
-  const current=node.nodeValue||'';
-  let record=captureOriginals.get(node);
-  if(record){
-   if(current===record.masked)continue;
-   const masked=replaceCaptureNames(current);
-   record={original:current,masked};
-   captureOriginals.set(node,record);
-   if(masked!==current)node.nodeValue=masked;
-   continue;
-  }
-  const masked=replaceCaptureNames(current);
-  if(masked===current)continue;
-  captureOriginals.set(node,{original:current,masked});
-  captureNodes.add(node);
-  node.nodeValue=masked;
- }
-}
-function restoreCaptureNode(node){
- const record=captureOriginals.get(node);
- if(record&&node.isConnected&&node.nodeValue===record.masked)node.nodeValue=record.original;
- captureNodes.delete(node);
-}
-function restoreCaptureOutsideAllowed(){
- for(const node of [...captureNodes]){
-  if(!node.isConnected){captureNodes.delete(node);continue;}
-  const row=node.parentElement?.closest?.('[data-sentry-component="RightTextContent"],[data-sentry-component="LeftTextContent"]');
-  if(!row){restoreCaptureNode(node);continue;}
-  const turn=captureTurns().find(t=>t.rows.includes(row));
-  if(!turn||!captureAllowedTurns.has(turn.key))restoreCaptureNode(node);
- }
-}
-function applyCaptureAllowed(){
- if(!captureMode)return;
- const turns=captureTurns();
- for(const turn of turns){
-  if(!captureAllowedTurns.has(turn.key))continue;
-  for(const row of turn.rows)maskCaptureRow(row);
- }
- restoreCaptureOutsideAllowed();
- // Header is intentionally masked while capture mode is on.
- const header=document.querySelector('[data-testid="chat-header-profile"]');
- if(header){
-  const walker=document.createTreeWalker(header,NodeFilter.SHOW_TEXT);
-  let node;
-  while((node=walker.nextNode())){
-   if(!captureNodeAllowed(node))continue;
-   const current=node.nodeValue||'';
-   let record=captureOriginals.get(node);
-   if(record){
-    if(current===record.masked)continue;
-    const masked=replaceCaptureNames(current);
-    captureOriginals.set(node,{original:current,masked});
-    if(masked!==current)node.nodeValue=masked;
-   }else{
-    const masked=replaceCaptureNames(current);
-    if(masked!==current){
-     captureOriginals.set(node,{original:current,masked});
-     captureNodes.add(node);
-     node.nodeValue=masked;
-    }
-   }
-  }
- }
-}
-function captureAddVisibleInDirection(direction){
- if(!captureMode)return;
- const turns=captureTurns();
- const visible=captureVisibleTurns(turns);
- if(!visible.length)return;
-
- for(const turn of visible){
-  if(captureAllowedTurns.has(turn.key))continue;
-  const seen=captureSeenTurns[direction];
-  if(seen.size>=CAPTURE_TURN_LIMIT)continue;
-  seen.add(turn.key);
-  captureAllowedTurns.add(turn.key);
- }
- applyCaptureAllowed();
- updateCaptureButton();
-}
-function captureOnScroll(){
- if(!captureMode||!captureScrollRoot)return;
- const next=captureScrollRoot.scrollTop||0;
- const delta=next-captureLastScrollTop;
- if(Math.abs(delta)>=CAPTURE_SCROLL_THRESHOLD){
-  captureScrollDirection=delta>0?'down':'up';
-  captureLastScrollTop=next;
- }
- if(captureScrollRAF)return;
- captureScrollRAF=requestAnimationFrame(()=>{
-  captureScrollRAF=0;
-  if(captureScrollDirection)captureAddVisibleInDirection(captureScrollDirection);
- });
-}
-function bindCaptureScroll(){
- const log=captureLog();
- const root=log?.closest('[class*="overflow-y-auto"]')||log;
- if(captureScrollRoot===root)return;
- if(captureScrollRoot)captureScrollRoot.removeEventListener('scroll',captureOnScroll);
- captureScrollRoot=root||null;
- if(captureScrollRoot){
-  captureLastScrollTop=captureScrollRoot.scrollTop||0;
-  captureScrollRoot.addEventListener('scroll',captureOnScroll,{passive:true});
- }
-}
-function unbindCaptureScroll(){
- if(captureScrollRoot)captureScrollRoot.removeEventListener('scroll',captureOnScroll);
- captureScrollRoot=null;
- if(captureScrollRAF)cancelAnimationFrame(captureScrollRAF);
- captureScrollRAF=0;
- captureScrollDirection=null;
-}
-function restoreCaptureMode(){
- for(const node of [...captureNodes])restoreCaptureNode(node);
- restoreCaptureRowSnapshots();
-}
-function restoreCapturePlaceholders(){
- const charName=captureIdentity.charNames.find(name=>name&&name!=='{{char}}')||'';
- const userName=captureIdentity.userNames.find(name=>name&&name!=='{{user}}')||'';
-
- // Do NOT sweep message text here.
- // Alias text such as "미정" is intentionally masked as {{user}} during capture,
- // and its exact original spelling is restored by restoreCaptureNode().
- // A global {{user}} -> full-name replacement would wrongly turn "미정" into "김미정".
- const nameRoots=[
-  ...document.querySelectorAll('.cc-meta-name'),
-  document.querySelector('[data-testid="chat-header-profile"]')
- ].filter(Boolean);
-
- for(const root of nameRoots){
-  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
-  let node;
-  while((node=walker.nextNode())){
-   if(!captureNodeAllowed(node))continue;
-   const value=node.nodeValue||'';
-   let restored=value;
-   if(charName)restored=restored.replace(/\{\{char\}\}/g,charName);
-   if(userName)restored=restored.replace(/\{\{user\}\}/g,userName);
-   if(restored!==value)node.nodeValue=restored;
-  }
- }
-}
-function reconcileAvatarsAfterCapture(){
- // Remove every temporary mob decoration first, then rebuild only genuine mob rows.
- document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());
- document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));
- document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));
- for(const body of document.querySelectorAll('[data-sentry-component="LeftTextContent"]')){
-  updateMobPersonAvatar(body);
- }
-}
-function updateCaptureButton(){
- if(!captureButton)return;
- captureButton.classList.toggle('cc-capture-active',captureMode);
- captureButton.setAttribute('aria-pressed',String(captureMode));
- captureButton.textContent=captureMode?'캡쳐 해제':'캡쳐모드';
- const up=captureSeenTurns.up.size;
- const down=captureSeenTurns.down.size;
- captureButton.title=captureMode
-  ? `현재 화면 기준 · 위 ${up}/${CAPTURE_TURN_LIMIT}턴 · 아래 ${down}/${CAPTURE_TURN_LIMIT}턴`
-  : '캡쳐할 대화 근처에서 켜세요 · 이름을 {{char}} / {{user}}로 가립니다';
-}
-function setCaptureMode(enabled){
- const next=enabled===true;
- if(next===captureMode){if(next){bindCaptureScroll();applyCaptureAllowed();}return;}
- if(next){
-  captureIdentity={
-   charNames:captureCharacterIdentity(),
-   userNames:captureUserIdentity()
-  };
-  captureAllowedTurns.clear();
-  captureSeenTurns.up.clear();
-  captureSeenTurns.down.clear();
-  captureRowSnapshots.clear();
-  captureMode=true;
-
-  // Activation screen is the fixed anchor. Mask every turn visible right now.
-  const initial=captureVisibleTurns(captureTurns());
-  for(const turn of initial)captureAllowedTurns.add(turn.key);
-
-  bindCaptureScroll();
-  applyCaptureAllowed();
- }else{
-  captureMode=false;
-  unbindCaptureScroll();
-  restoreCaptureMode();
-  // React may have recycled text nodes while capture mode was active.
-  // Restore any remaining placeholders before throwing away the remembered identities.
-  restoreCapturePlaceholders();
-  reconcileAvatarsAfterCapture();
-  captureAllowedTurns.clear();
-  captureSeenTurns.up.clear();
-  captureSeenTurns.down.clear();
-  captureRowSnapshots.clear();
-  captureIdentity={charNames:[],userNames:[]};
-  schedule();
- }
- updateCaptureButton();
-}
-
-/* Called by the shared mutation batcher. It never expands the 5-turn boundary by itself. */
-function applyCaptureMode(){
- if(!captureMode)return;
- bindCaptureScroll();
- applyCaptureAllowed();
-}
-
 /* V63 safe optimization stage 1:
    Batch repeated DOM mutations into one animation-frame pass.
    No dirty-row cache, no extra timer, no change to date/turn logic. */
@@ -3744,7 +3286,6 @@ function schedule(){
   updateDialogueHighlight();
   makeSendArrow();
   updateActionAvailability();
-  applyCaptureMode();
   announceFrameControls();
  });
 }
@@ -3925,12 +3466,6 @@ function makeControls(){
   btn.addEventListener('click',()=>runOriginalAction(key));
   actionButtons.set(key,btn);list.appendChild(btn);
  }
- captureButton=document.createElement('button');
- captureButton.className='cc-action';
- captureButton.type='button';
- captureButton.addEventListener('click',()=>setCaptureMode(!captureMode));
- list.appendChild(captureButton);
- updateCaptureButton();
  const helpButton=document.createElement('button');
  helpButton.className='cc-action cc-help-open';
  helpButton.type='button';
@@ -3959,14 +3494,7 @@ function makeControls(){
     <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7.5Z"/><path d="M3.5 10h17"/></svg></span><span>도구모음</span></div>
     <div class="cc-help-lines">
      <div class="cc-help-line"><span class="cc-help-dot">•</span><span>플로팅 버튼을 드래그하면 도구모음에 넣을 수 있어요.</span></div>
-     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>호환 확인된 기능: 제타킷 · inPocket · 캡쳐</span></div>
-    </div>
-   </section>
-   <section class="cc-help-card">
-    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4.5 7.5h3l1.5-2h6l1.5 2h3a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V9a1.5 1.5 0 0 1 1.5-1.5Z"/><circle cx="12" cy="13" r="3.5"/></svg></span><span>캡쳐모드</span></div>
-    <div class="cc-help-lines">
-     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>캡쳐하고 싶은 곳에서 캡쳐모드를 실행해 주세요.</span></div>
-     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>실행한 곳부터 스크롤 방향으로 약 5턴까지 사용할 수 있어요.</span></div>
+     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>호환 확인된 기능: 제타킷 · inPocket</span></div>
     </div>
    </section>
    <section class="cc-help-card">
@@ -4029,7 +3557,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();restoreCapturePlaceholders();reconcileAvatarsAfterCapture();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureRowSnapshots.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -4037,7 +3565,7 @@ function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbin
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
 
 
