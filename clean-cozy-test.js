@@ -2295,7 +2295,7 @@ if(FRAME_CHAT)style.textContent+=`
    cannot overwrite it. This reserves space only inside the chat log. */
 @media (max-width:700px){
   body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]{
-    padding-right:36px!important;
+    padding-right:32px!important;
     box-sizing:border-box!important;
   }
 
@@ -2324,7 +2324,7 @@ if(FRAME_CHAT)style.textContent+=`
   body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
   [data-sentry-component="RightTextContent"]
   [data-sentry-component="ChatBubbleContainer"]{
-    max-width:calc(100% + 4px)!important;
+    max-width:calc(100% + 8px)!important;
   }
 }
 `;
