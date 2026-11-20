@@ -4072,6 +4072,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   const IS_FRAME_WORKER = location.hostname === 'frame.pingpong.ai';
   const remoteActions = new Map();
   let remoteGeometry = null;
+  let remoteControlGeometry = null;
   let remoteDragHover = false;
   let geometryInterval = 0;
 
@@ -5331,6 +5332,40 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     render();
   }
 
+  function sendControlGeometryToOuter() {
+    if (!IS_FRAME_WORKER) return;
+    const line = d.getElementById('cc-line-shortcut');
+    const edit = d.getElementById('cc-edit-shortcut');
+    const toggle = d.getElementById('cc-toggle');
+    if (!line?.isConnected || !edit?.isConnected || !toggle?.isConnected) {
+      postToOuter({ type: 'CONTROL_GEOMETRY', ready: false });
+      return;
+    }
+    const style = getComputedStyle(line);
+    const rect = line.getBoundingClientRect();
+    if (
+      style.display === 'none' ||
+      style.visibility === 'hidden' ||
+      rect.width <= 0 ||
+      rect.height <= 0
+    ) {
+      postToOuter({ type: 'CONTROL_GEOMETRY', ready: false });
+      return;
+    }
+    postToOuter({
+      type: 'CONTROL_GEOMETRY',
+      ready: true,
+      line: {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height
+      }
+    });
+  }
+
   function sendGeometryToFrameWorkers() {
     if (!IS_OUTER || !launcher) return;
     const lr = launcher.getBoundingClientRect();
@@ -5341,7 +5376,10 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       if (!/https:\/\/frame\.pingpong\.ai\//i.test(src)) return;
       const fr = frame.getBoundingClientRect();
       const frameRect = { left: fr.left, top: fr.top, right: fr.right, bottom: fr.bottom, width: fr.width, height: fr.height };
-      try { frame.contentWindow?.postMessage({ channel: CHANNEL, type: 'GEOMETRY', launcher: launcherRect, frame: frameRect }, '*'); } catch (_) {}
+      try {
+        frame.contentWindow?.postMessage({ channel: CHANNEL, type: 'GEOMETRY', launcher: launcherRect, frame: frameRect }, '*');
+        frame.contentWindow?.postMessage({ channel: CHANNEL, type: 'REQUEST_CONTROL_GEOMETRY' }, '*');
+      } catch (_) {}
     });
   }
 
@@ -5358,8 +5396,27 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
           host?.classList.toggle('remote-drag', !!data.active);
           host?.classList.toggle('drop-ready', !!data.active);
           host?.classList.toggle('drop-hover', !!data.active && !!data.hovering);
+        } else if (data.type === 'CONTROL_GEOMETRY') {
+          if (!data.ready || !data.line) {
+            remoteControlGeometry = null;
+            placeLauncher();
+          } else {
+            const scene = [...d.querySelectorAll('iframe')].find(frame => {
+              try { return frame.contentWindow === event.source; } catch (_) { return false; }
+            });
+            if (!scene) return;
+            const fr = scene.getBoundingClientRect();
+            remoteControlGeometry = {
+              left: fr.left + Number(data.line.left || 0),
+              top: fr.top + Number(data.line.top || 0),
+              width: Number(data.line.width || 0),
+              height: Number(data.line.height || 0)
+            };
+            placeLauncher();
+          }
         } else if (data.type === 'HELLO') {
           sendGeometryToFrameWorkers();
+          try { event.source?.postMessage({ channel: CHANNEL, type: 'REQUEST_CONTROL_GEOMETRY' }, '*'); } catch (_) {}
         }
         return;
       }
@@ -5368,6 +5425,8 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
         if (!/(^https:\/\/zeta-ai\.io$)|(^https:\/\/[^/]+\.zeta-ai\.io$)/i.test(event.origin)) return;
         if (data.type === 'GEOMETRY') {
           remoteGeometry = { launcher: data.launcher, frame: data.frame };
+        } else if (data.type === 'REQUEST_CONTROL_GEOMETRY') {
+          sendControlGeometryToOuter();
         } else if (data.type === 'EXEC') {
           const action = actions.get(String(data.id));
           if (!action) { notifyOuter(); return; }
@@ -5389,6 +5448,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
     if (IS_FRAME_WORKER) {
       postToOuter({ type: 'HELLO' });
+      sendControlGeometryToOuter();
       w.setTimeout(notifyOuter, 120);
     }
   }
@@ -5417,13 +5477,32 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
   function placeLauncher() {
     if (!launcher) return;
-    // Clean Cozy의 세 버튼은 right:8px / 44px 간격으로 배치된다.
-    // 최상단 줄정리 버튼(bottom:258px) 위에 같은 간격으로 네 번째 버튼을 둔다.
-    launcher.style.setProperty('left', 'auto', 'important');
-    launcher.style.setProperty('top', 'auto', 'important');
-    launcher.style.setProperty('right', '8px', 'important');
-    launcher.style.setProperty('bottom', '302px', 'important');
-    if (IS_OUTER) sendGeometryToFrameWorkers();
+
+    if (IS_OUTER) {
+      const g = remoteControlGeometry;
+      if (!g || !Number.isFinite(g.left) || !Number.isFinite(g.top) || g.width <= 0 || g.height <= 0) {
+        launcher.style.setProperty('visibility', 'hidden', 'important');
+        launcher.style.setProperty('pointer-events', 'none', 'important');
+        return;
+      }
+
+      const gap = 12;
+      const size = launcher.getBoundingClientRect().width || 32;
+      const left = g.left + (g.width - size) / 2;
+      const top = g.top - gap - size;
+
+      launcher.style.setProperty('left', `${Math.round(left)}px`, 'important');
+      launcher.style.setProperty('top', `${Math.round(top)}px`, 'important');
+      launcher.style.setProperty('right', 'auto', 'important');
+      launcher.style.setProperty('bottom', 'auto', 'important');
+      launcher.style.setProperty('visibility', 'visible', 'important');
+      launcher.style.setProperty('pointer-events', 'auto', 'important');
+      sendGeometryToFrameWorkers();
+      return;
+    }
+
+    launcher.style.setProperty('visibility', 'hidden', 'important');
+    launcher.style.setProperty('pointer-events', 'none', 'important');
   }
 
   function placePanel() {
@@ -5604,6 +5683,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       scanTimer = w.setTimeout(() => {
         refreshRoots();
         restoreSavedEntries();
+        if (IS_FRAME_WORKER) sendControlGeometryToOuter();
       }, 100);
     });
     observer.observe(d.documentElement, { childList: true, subtree: true });
@@ -5631,9 +5711,17 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     if (IS_OUTER) {
       createUI();
       geometryInterval = w.setInterval(sendGeometryToFrameWorkers, 700);
-      on(w, 'resize', () => { placeLauncher(); requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
-      on(w.visualViewport, 'resize', () => { placeLauncher(); requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
-      on(w.visualViewport, 'scroll', () => { placeLauncher(); requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+      on(w, 'resize', () => { requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+      if (w.visualViewport) {
+        on(w.visualViewport, 'resize', () => { requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+        on(w.visualViewport, 'scroll', () => { requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+      }
+    } else if (IS_FRAME_WORKER) {
+      on(w, 'resize', sendControlGeometryToOuter, { passive: true });
+      if (w.visualViewport) {
+        on(w.visualViewport, 'resize', sendControlGeometryToOuter, { passive: true });
+        on(w.visualViewport, 'scroll', sendControlGeometryToOuter, { passive: true });
+      }
     }
 
     // outer 자체 플로팅 도구와 iframe 내부 플로팅 도구 모두 감지한다.
