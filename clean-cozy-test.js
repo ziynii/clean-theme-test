@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Clean Cozy Integrated Tools
 // @namespace    zeta-clean-cozy-integrated
-// @version      91.0-integrated
+// @version      88.0-integrated
 // @description  Clean Cozy 테마 + 우측 도구 폴더 + 드래그 도구모음 + ZETAKIT 응답검토 퀵바 플로팅 어댑터 통합본
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -41,71 +41,14 @@ function outerStableRoomKey(){
 // Cross-origin coordination between our own two userscript instances only.
 // No access to the other frame's DOM, Zeta data, or internal APIs.
 let ccLastFrameReadyAt=0;
-let ccLastFrameMountedAt=0;
-let ccFinalReadySent=false;
-let ccParentSettingsHydrated=!FRAME_CHAT;
-let ccOuterFrameReady=false;
-let ccOuterFolderReady=!!document.getElementById('zeta-universal-floating-folder-v1');
-function maybeRevealTheme(){
- if(!OUTER_ROOM)return;
- if(ccOuterFrameReady&&ccOuterFolderReady)hideThemeLoadingScreen();
-}
-function onCozyFolderReady(){
- if(!OUTER_ROOM)return;
- ccOuterFolderReady=true;
- maybeRevealTheme();
-}
-if(OUTER_ROOM)window.addEventListener('cc-tool-folder-ready-v1',onCozyFolderReady);
-function announceFrameMounted(){
- if(!FRAME_CHAT||ccParentSettingsHydrated||!document.body)return;
- const now=Date.now();
- if(now-ccLastFrameMountedAt<250)return;
- ccLastFrameMountedAt=now;
- try{window.parent.postMessage({type:'clean-cozy-frame-mounted-v1'},'https://zeta-ai.io');}catch(e){}
-}
-function ccElementVisible(el){
- if(!(el instanceof HTMLElement)||!el.isConnected)return false;
- const style=getComputedStyle(el);
- if(style.display==='none'||style.visibility==='hidden'||style.opacity==='0')return false;
- const rect=el.getBoundingClientRect();
- return rect.width>0&&rect.height>0;
-}
-function ccSettingsActuallyApplied(){
- const root=document.documentElement;
- const avatarOk=(root.classList.contains('cc-avatar-hidden')===(settings.avatarMode==='none'))&&
-  (root.classList.contains('cc-avatar-user-hidden')===(settings.avatarMode==='userHidden'||settings.avatarMode==='userHiddenHeart'))&&
-  (root.classList.contains('cc-avatar-heart')===(settings.avatarMode==='userHiddenHeart'));
- const highlightOk=root.classList.contains('cc-dialogue-highlight')===(settings.dialogueHighlight===true);
- const avatarInput=panel?.querySelector('input[name="cc-avatar-mode"]:checked');
- const highlightInput=panel?.querySelector('#cc-dialogue-highlight-toggle');
- const narrationInput=panel?.querySelector('#cc-remove-narration-toggle');
- const lineInput=panel?.querySelector('input[name="cc-line-break-mode"]:checked');
- return avatarOk&&highlightOk&&
-  avatarInput?.value===settings.avatarMode&&
-  highlightInput?.checked===(settings.dialogueHighlight===true)&&
-  narrationInput?.checked===(settings.removeNarration===true)&&
-  lineInput?.value===settings.lineBreakMode;
-}
-function ccFrameReadyForReveal(){
- if(!FRAME_CHAT||!ccParentSettingsHydrated)return false;
- const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
- const composer=document.querySelector('[data-testid="composer-input-box"]');
- const header=document.querySelector('[data-testid="chat-header-profile"]');
- const help=panel?.querySelector('.cc-help-open');
- return !!(
-  document.body?.classList.contains('cc-frame-chat-root')&&
-  log&&composer&&header&&panel?.isConnected&&settingsBackdrop?.isConnected&&
-  ccElementVisible(toggle)&&ccElementVisible(editShortcut)&&ccElementVisible(lineShortcut)&&
-  captureButton?.isConnected&&help?.isConnected&&
-  ccSettingsActuallyApplied()
- );
-}
 function announceFrameControls(force=false){
- if(!FRAME_CHAT||ccFinalReadySent||!ccFrameReadyForReveal())return;
+ if(!FRAME_CHAT||ccStableRoomKey)return;
+ if(!document.body?.classList.contains('cc-frame-chat-root'))return;
+ const button=document.getElementById('cc-toggle');
+ if(!button||!button.isConnected)return;
  const now=Date.now();
  if(!force&&now-ccLastFrameReadyAt<700)return;
  ccLastFrameReadyAt=now;
- ccFinalReadySent=true;
  try{window.parent.postMessage({type:'clean-cozy-frame-controls-ready-v163',settings:ccSettingsSnapshot},'https://zeta-ai.io');}catch(e){}
 }
 function onCozyFrameReady(event){
@@ -113,19 +56,15 @@ function onCozyFrameReady(event){
  const scene=document.querySelector('iframe[title="scene"][src^="https://frame.pingpong.ai/"]');
  if(!scene||event.source!==scene.contentWindow)return;
  const data=event.data;
- if(data?.type==='clean-cozy-frame-mounted-v1'){
-  // Phase 1: iframe exists. Hydrate it with the outer document's saved settings first.
+ if(data?.type==='clean-cozy-frame-controls-ready-v163'){
+  // The outer zeta-ai.io document is the source of truth for saved UI settings.
+  // Do not let the iframe's startup/default snapshot overwrite persisted choices.
   const room=outerStableRoomKey();
   sendToCozyScene('room-key',room);
   sendToCozyScene('turn-store',{room,turns:roomTurnRows(room)});
   sendToCozyScene('settings',settings);
-  return;
- }
- if(data?.type==='clean-cozy-frame-controls-ready-v163'){
-  // Phase 2: the iframe verified chat DOM, all three controls and settings state.
   document.documentElement.classList.add('cc-inner-controls-ready');
-  ccOuterFrameReady=true;
-  maybeRevealTheme();
+  hideThemeLoadingScreen();
   return;
  }
  if(data?.type==='cc-private-ui-v164'&&data.command==='turn-sync'){
@@ -175,8 +114,6 @@ function receiveCozyUIMessage(event){
   // Parent -> scene hydration: persist locally without echoing the same payload back.
   persistSettingsLocal();
   applyOpts();
-  ccParentSettingsHydrated=true;
-  schedule();
  }
 }
 if(FRAME_CHAT)window.addEventListener('message',receiveCozyUIMessage);
@@ -354,22 +291,44 @@ function ccMainCharacterName(){
 }
 function updateMobPersonAvatar(body){
  if(!(body instanceof HTMLElement)||!body.matches('[data-sentry-component="LeftTextContent"]'))return;
+
  const speaker=body.querySelector('.cc-meta-name')?.textContent?.trim()||
   body.querySelector('.caption1')?.textContent?.trim()||
   (FRAME_CHAT?frameNameLabel(body)?.textContent?.trim():'')||'';
- const main=ccMainCharacterName();
- const norm=v=>String(v||'').replace(/\s+/g,' ').trim();
- // 캡쳐모드에서는 메인 캐릭터 이름이 {{char}}로 치환된다.
- // {{char}}를 모브로 오인해 가짜 하트 아바타를 하나 더 만들지 않는다.
- const captureMain = captureMode && norm(speaker)==='{{char}}';
- const isMob=Boolean(speaker&&main&&!captureMain&&norm(speaker)!==norm(main));
+
  let fake=body.querySelector(':scope > .cc-mob-person-avatar');
- const nativeAvatar=[...body.children].find(el=>el instanceof HTMLElement&&el.tagName==='BUTTON')||null;
+
+ // Zeta renders a direct avatar button for character rows.
+ // Registered plot characters have a real profile <img>; temporary/generated
+ // speakers may have only the generic/default avatar shell.
+ const nativeAvatar=[...body.children].find(
+  el=>el instanceof HTMLElement&&el.tagName==='BUTTON'
+ )||null;
+ const nativeProfileImage=nativeAvatar?.querySelector('img[src],img[srcset]')||null;
+ const hasRegisteredProfile=Boolean(
+  nativeProfileImage &&
+  (
+   (nativeProfileImage.getAttribute('src')||'').trim() ||
+   (nativeProfileImage.getAttribute('srcset')||'').trim() ||
+   (nativeProfileImage.currentSrc||'').trim()
+  )
+ );
+
+ // During capture, {{char}} is still a known character placeholder.
+ // Never turn it into a mob heart merely because its visible name changed.
+ const captureKnownCharacter=captureMode&&speaker.trim()==='{{char}}';
+
+ // Mob rule:
+ // - real Zeta profile image => registered plot character, preserve it
+ // - no real profile image + named speaker => temporary/generated speaker, use heart
+ const isMob=Boolean(speaker&&!captureKnownCharacter&&!hasRegisteredProfile);
 
  if(!isMob){
   fake?.remove();
   body.classList.remove('cc-mob-has-native');
-  for(const btn of body.querySelectorAll(':scope > button.cc-mob-native-avatar'))btn.classList.remove('cc-mob-native-avatar');
+  for(const btn of body.querySelectorAll(':scope > button.cc-mob-native-avatar')){
+   btn.classList.remove('cc-mob-native-avatar');
+  }
   return;
  }
 
@@ -3328,6 +3287,10 @@ let captureButton=null;
 let captureIdentity={charNames:[],userNames:[]};
 const captureOriginals=new WeakMap();
 const captureNodes=new Set();
+/* React can replace masked text nodes while capture mode is active.
+   Keep an exact per-row snapshot so fresh {{char}}/{{user}} nodes can still
+   be restored to the original spelling (e.g. 설기 / 지연), not guessed. */
+const captureRowSnapshots=new Map();
 const captureAllowedTurns=new Set();
 const captureSeenTurns={up:new Set(),down:new Set()};
 let captureScrollRoot=null;
@@ -3363,6 +3326,7 @@ function captureCharacterIdentity(){
  if(/^[가-힣]{3,}$/.test(full))aliases.add(full.slice(-2));
  return [...aliases].filter(captureValidName).sort((a,b)=>b.length-a.length);
 }
+/* capture alias: 3글자 이상 한글 유저명은 뒤 2글자도 {{user}}로 가림 */
 function captureUserIdentity(){
  const right=document.querySelector(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) [data-sentry-component="RightTextContent"]');
  const candidates=[
@@ -3440,7 +3404,118 @@ function captureVisibleTurns(turns){
   return rect.bottom>viewport.top+2 && rect.top<viewport.bottom-2;
  }));
 }
+function captureRowSnapshotKey(row){
+ if(!(row instanceof HTMLElement))return '';
+ const side=row.matches('[data-sentry-component="RightTextContent"]')?'u':'c';
+ const indexed=row.closest('[data-index]');
+ const index=indexed?.getAttribute('data-index');
+ // Only use Zeta's rendered stable index. Never fall back to visual row position:
+ // React can insert/recycle rows and make pos-based restoration hit a different message.
+ return (index!==null&&index!==undefined&&index!=='')?side+':idx:'+index:'';
+}
+function captureNameTokens(value){
+ const source=String(value||'');
+ const names=[
+  ...captureIdentity.charNames.map(name=>({name,placeholder:'{{char}}'})),
+  ...captureIdentity.userNames.map(name=>({name,placeholder:'{{user}}'}))
+ ].filter(item=>item.name&&item.name!==item.placeholder)
+  .sort((a,b)=>b.name.length-a.name.length);
+
+ const tokens=[];
+ let i=0;
+ while(i<source.length){
+  let hit=null;
+  for(const item of names){
+   if(source.startsWith(item.name,i)){hit=item;break;}
+  }
+  if(hit){
+   tokens.push({placeholder:hit.placeholder,original:hit.name});
+   i+=hit.name.length;
+  }else{
+   i+=1;
+  }
+ }
+ return tokens;
+}
+function rememberCaptureRowSnapshot(row){
+ const key=captureRowSnapshotKey(row);
+ if(!key||captureRowSnapshots.has(key))return;
+ const entries=[];
+ const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+ let node;
+ while((node=walker.nextNode())){
+  if(!captureNodeAllowed(node))continue;
+  const original=node.nodeValue||'';
+  const masked=replaceCaptureNames(original);
+  if(masked!==original)entries.push({original,masked,tokens:captureNameTokens(original)});
+ }
+ if(entries.length)captureRowSnapshots.set(key,entries);
+}
+function restoreCaptureRowSnapshots(){
+ const log=captureLog();
+ if(!log)return;
+ const rows=[...log.querySelectorAll(
+  '[data-sentry-component="RightTextContent"],[data-sentry-component="LeftTextContent"]'
+ )];
+ for(const row of rows){
+  const key=captureRowSnapshotKey(row);
+  const saved=key?captureRowSnapshots.get(key):null;
+  if(!saved?.length)continue;
+
+  const currentNodes=[];
+  const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+  let node;
+  while((node=walker.nextNode())){
+   if(!captureNodeAllowed(node))continue;
+   const value=node.nodeValue||'';
+   if(value.includes('{{char}}')||value.includes('{{user}}'))currentNodes.push(node);
+  }
+  if(!currentNodes.length)continue;
+
+  const unused=saved.map((entry,index)=>({entry,index,used:false}));
+
+  // Pass 1: exact whole-node restoration when React kept the same text shape.
+  for(const currentNode of currentNodes){
+   const value=currentNode.nodeValue||'';
+   const hit=unused.find(item=>!item.used&&item.entry.masked===value);
+   if(hit){
+    currentNode.nodeValue=hit.entry.original;
+    hit.used=true;
+   }
+  }
+
+  // Pass 2: React/markdown may split or merge text nodes. For placeholders that
+  // remain, restore ONLY the placeholder token itself, never the whole sentence.
+  // Tokens come only from unused snapshots of this same stable data-index row.
+  const tokenQueue=unused
+   .filter(item=>!item.used)
+   .flatMap(item=>Array.isArray(item.entry.tokens)?item.entry.tokens:[]);
+
+  if(tokenQueue.length){
+   let tokenPos=0;
+   const walker2=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+   let node2;
+   while((node2=walker2.nextNode())){
+    if(!captureNodeAllowed(node2))continue;
+    let value=node2.nodeValue||'';
+    if(!value.includes('{{char}}')&&!value.includes('{{user}}'))continue;
+
+    value=value.replace(/\{\{char\}\}|\{\{user\}\}/g,(placeholder)=>{
+     for(let i=tokenPos;i<tokenQueue.length;i++){
+      const token=tokenQueue[i];
+      if(token.placeholder!==placeholder)continue;
+      tokenPos=i+1;
+      return token.original;
+     }
+     return placeholder;
+    });
+    node2.nodeValue=value;
+   }
+  }
+ }
+}
 function maskCaptureRow(row){
+ rememberCaptureRowSnapshot(row);
  const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
  let node;
  while((node=walker.nextNode())){
@@ -3559,22 +3634,27 @@ function unbindCaptureScroll(){
 }
 function restoreCaptureMode(){
  for(const node of [...captureNodes])restoreCaptureNode(node);
+ restoreCaptureRowSnapshots();
 }
 function restoreCapturePlaceholders(){
  const charName=captureIdentity.charNames.find(name=>name&&name!=='{{char}}')||'';
  const userName=captureIdentity.userNames.find(name=>name&&name!=='{{user}}')||'';
- const roots=[];
- const log=captureLog();
- if(log)roots.push(log);
- const header=document.querySelector('[data-testid="chat-header-profile"]');
- if(header)roots.push(header);
 
- for(const root of roots){
+ // Do NOT sweep message text here.
+ // Alias text such as "미정" is intentionally masked as {{user}} during capture,
+ // and its exact original spelling is restored by restoreCaptureNode().
+ // A global {{user}} -> full-name replacement would wrongly turn "미정" into "김미정".
+ const nameRoots=[
+  ...document.querySelectorAll('.cc-meta-name'),
+  document.querySelector('[data-testid="chat-header-profile"]')
+ ].filter(Boolean);
+
+ for(const root of nameRoots){
   const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
   let node;
   while((node=walker.nextNode())){
    if(!captureNodeAllowed(node))continue;
-   let value=node.nodeValue||'';
+   const value=node.nodeValue||'';
    let restored=value;
    if(charName)restored=restored.replace(/\{\{char\}\}/g,charName);
    if(userName)restored=restored.replace(/\{\{user\}\}/g,userName);
@@ -3613,6 +3693,7 @@ function setCaptureMode(enabled){
   captureAllowedTurns.clear();
   captureSeenTurns.up.clear();
   captureSeenTurns.down.clear();
+  captureRowSnapshots.clear();
   captureMode=true;
 
   // Activation screen is the fixed anchor. Mask every turn visible right now.
@@ -3632,6 +3713,7 @@ function setCaptureMode(enabled){
   captureAllowedTurns.clear();
   captureSeenTurns.up.clear();
   captureSeenTurns.down.clear();
+  captureRowSnapshots.clear();
   captureIdentity={charNames:[],userNames:[]};
   schedule();
  }
@@ -3654,7 +3736,6 @@ function schedule(){
  requestAnimationFrame(()=>{
   scheduled=false;
   markFrameChatRoot();
-  announceFrameMounted();
   finishPendingLineEdit();
   enhance();
   enhanceHeader();
@@ -3948,7 +4029,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();restoreCapturePlaceholders();reconcileAvatarsAfterCapture();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM){window.removeEventListener('message',onCozyFrameReady);window.removeEventListener('cc-tool-folder-ready-v1',onCozyFolderReady);}if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbindCaptureScroll();restoreCaptureMode();restoreCapturePlaceholders();reconcileAvatarsAfterCapture();captureAllowedTurns.clear();captureSeenTurns.up.clear();captureSeenTurns.down.clear();captureRowSnapshots.clear();captureIdentity={charNames:[],userNames:[]};}document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -3956,7 +4037,7 @@ function stop(){hideThemeLoadingScreen();if(captureMode){captureMode=false;unbin
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();announceFrameMounted();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();applyCaptureMode();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
 
 
@@ -5556,7 +5637,6 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
     placeLauncher();
     render();
-    try{w.dispatchEvent(new CustomEvent('cc-tool-folder-ready-v1'));}catch(_){}
   }
 
   function startObserver() {
