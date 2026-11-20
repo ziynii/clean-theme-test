@@ -243,15 +243,37 @@ function markFrameChatRoot(){
  const composerDock=composer?.closest('[class*="bg-linear-to-b"]');
  if(composerDock&&!composerDock.hasAttribute('data-sentry-component'))composerDock.setAttribute('data-sentry-component','ChatComposer');
  // Old Zeta exposed named sentry wrappers. New Zeta renders left/right rows directly.
+ // Keep the known class match as the first choice, but fall back to rendered geometry
+ // because Zeta can recycle rows with slightly different Tailwind class combinations.
  for(const row of log.querySelectorAll('div.flex.flex-row.items-start')){
   const cls=row.classList;
-  const isUser=cls.contains('ml-auto')&&cls.contains('pr-2');
-  const isCharacter=cls.contains('pl-2')&&cls.contains('pr-[72px]');
-  if(!isUser&&!isCharacter)continue;
   const bubble=[...row.querySelectorAll('div')].find(el=>
    el.classList.contains('w-fit')&&el.classList.contains('flex-col')&&
    (el.classList.contains('rounded-r-xl')||el.classList.contains('rounded-l-xl')));
   if(!bubble)continue;
+
+  const existingRole=row.getAttribute('data-sentry-component');
+  let isUser=existingRole==='RightTextContent'||(cls.contains('ml-auto')&&cls.contains('pr-2'));
+  let isCharacter=existingRole==='LeftTextContent'||(cls.contains('pl-2')&&cls.contains('pr-[72px]'));
+
+  if(!isUser&&!isCharacter){
+   const directAvatar=[...row.children].find(el=>
+    el instanceof HTMLElement&&el.tagName==='BUTTON'&&el.querySelector('img')
+   )||row.querySelector(':scope > button:has(img)');
+   if(directAvatar){
+    const avatarRect=directAvatar.getBoundingClientRect();
+    const bubbleRect=bubble.getBoundingClientRect();
+    if(avatarRect.left>=bubbleRect.right-2)isUser=true;
+    else if(avatarRect.right<=bubbleRect.left+2)isCharacter=true;
+   }
+  }
+
+  if(!isUser&&!isCharacter){
+   if(cls.contains('justify-end'))isUser=true;
+   else if(cls.contains('justify-start'))isCharacter=true;
+  }
+
+  if(!isUser&&!isCharacter)continue;
   const role=isUser?'RightTextContent':'LeftTextContent';
   if(row.getAttribute('data-sentry-component')!==role)row.setAttribute('data-sentry-component',role);
   if(!bubble.hasAttribute('data-sentry-component'))bubble.setAttribute('data-sentry-component','ChatBubbleContainer');
@@ -734,7 +756,7 @@ html.cc-tools-ready [data-sentry-component="QuickReplyButton"]{display:none!impo
   justify-content:flex-start!important;
 }
 [role="log"][aria-label="Chat messages"] [data-sentry-component="RightTextContent"]{
-  padding-right:14px!important;padding-left:14px!important;
+  padding-right:8px!important;padding-left:14px!important;
   justify-content:flex-end!important;
 }
 [role="log"][aria-label="Chat messages"] [data-sentry-component="LeftTextContent"] > div,
