@@ -639,11 +639,21 @@ a[testid^="room-list-item-"] span.body1{color:#25272A!important;-webkit-text-fil
 }
 /* Don't give the content column desktop-sized margins on mobile. */
 @media(max-width:640px){
+  /* Reserve a real right-side safe lane for the floating button stack. */
   [role="log"][aria-label="Chat messages"] [data-sentry-component="BodyView"],
-  [role="log"][aria-label="Chat messages"] [data-sentry-component="NarratorBubble"]{
-    max-width:100%!important;
-    padding-right:54px!important;
+  [role="log"][aria-label="Chat messages"] [data-sentry-component="NarratorBubble"],
+  [role="log"][aria-label="Chat messages"] [data-sentry-component="LeftTextContent"],
+  [role="log"][aria-label="Chat messages"] [data-sentry-component="RightTextContent"]{
+    width:calc(100% - 54px)!important;
+    max-width:calc(100% - 54px)!important;
+    margin-left:0!important;
+    margin-right:54px!important;
     box-sizing:border-box!important;
+  }
+
+  [role="log"][aria-label="Chat messages"] [data-sentry-component="LeftTextContent"] > div,
+  [role="log"][aria-label="Chat messages"] [data-sentry-component="RightTextContent"] > div{
+    max-width:100%!important;
   }
   [data-sentry-component="ChatBubbleContainer"] .chat,
   [data-sentry-component="ChatBubbleContainer"] .chat p{font-size:14px!important;}
