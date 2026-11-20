@@ -451,7 +451,7 @@ function hideThemeLoadingScreen(){
 }
 showThemeLoadingScreen();
 
-const defaults={avatarMode:'both',dialogueHighlight:false,removeNarration:false,lineBreakMode:'short'};
+const defaults={avatarMode:'both',dialogueHighlight:false,removeNarration:false,lineBreakMode:'short',buttonSafeLane:false};
 let settings={...defaults};
 try{
  const saved=JSON.parse(localStorage.getItem(STORE)||'{}');
@@ -461,6 +461,7 @@ try{
  // Restore the user's last explicit choice. First-time default remains OFF.
  settings.dialogueHighlight=saved.dialogueHighlight===true;
  settings.lineBreakMode=['short','long'].includes(saved.lineBreakMode)?saved.lineBreakMode:'short';
+ settings.buttonSafeLane=saved.buttonSafeLane===true;
 }catch(e){}
 function absorbSettings(p){
  if(!p||typeof p!=='object')return;
@@ -468,11 +469,13 @@ function absorbSettings(p){
  if(typeof p.dialogueHighlight==='boolean')settings.dialogueHighlight=p.dialogueHighlight;
  if(typeof p.removeNarration==='boolean')settings.removeNarration=p.removeNarration;
  if(['short','long'].includes(p.lineBreakMode))settings.lineBreakMode=p.lineBreakMode;
+ if(typeof p.buttonSafeLane==='boolean')settings.buttonSafeLane=p.buttonSafeLane;
  ccSettingsSnapshot={
   avatarMode:settings.avatarMode,
   dialogueHighlight:settings.dialogueHighlight===true,
   removeNarration:settings.removeNarration===true,
-  lineBreakMode:settings.lineBreakMode
+  lineBreakMode:settings.lineBreakMode,
+  buttonSafeLane:settings.buttonSafeLane===true
  };
 }
 function persistSettingsLocal(){
@@ -480,7 +483,8 @@ function persistSettingsLocal(){
   avatarMode:settings.avatarMode,
   dialogueHighlight:settings.dialogueHighlight===true,
   removeNarration:settings.removeNarration===true,
-  lineBreakMode:settings.lineBreakMode
+  lineBreakMode:settings.lineBreakMode,
+  buttonSafeLane:settings.buttonSafeLane===true
  };
  try{localStorage.setItem(STORE,JSON.stringify(ccSettingsSnapshot));}catch(e){}
 }
@@ -2078,6 +2082,33 @@ body.cc-frame-chat-root .cc-zeta-after-hidden::after{content:none!important;disp
 #cc-panel .cc-avatar-options{flex-direction:unset!important;}
 #cc-panel .cc-avatar-option{min-width:0!important;}
 #cc-panel .cc-avatar-option span{min-width:0!important;}
+#cc-panel .cc-safe-lane-options{
+ display:grid!important;
+ grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;
+ gap:4px 6px!important;
+ margin:0 0 6px!important;
+}
+#cc-panel .cc-safe-lane-option{
+ align-items:flex-start!important;
+ min-height:48px!important;
+}
+#cc-panel .cc-safe-lane-copy{
+ display:flex!important;
+ flex-direction:column!important;
+ gap:2px!important;
+ min-width:0!important;
+}
+#cc-panel .cc-safe-lane-label{
+ color:#3D4147!important;
+ font-size:11px!important;
+ line-height:1.3!important;
+}
+#cc-panel .cc-safe-lane-hint{
+ color:#9A9EA4!important;
+ font-size:9px!important;
+ font-weight:400!important;
+ line-height:1.25!important;
+}
 
 
 /* V36 — profile-selection light palette, scoped only to this step. */
@@ -2295,8 +2326,11 @@ if(FRAME_CHAT)style.textContent+=`
    cannot overwrite it. This reserves space only inside the chat log. */
 @media (max-width:700px){
   body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]{
-    padding-right:36px!important;
+    padding-right:0!important;
     box-sizing:border-box!important;
+  }
+  html.cc-button-safe-lane body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]{
+    padding-right:36px!important;
   }
 
   body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
@@ -2605,6 +2639,7 @@ function applyOpts(){
  root.classList.toggle('cc-avatar-user-hidden',settings.avatarMode==='userHidden'||settings.avatarMode==='userHiddenHeart');
  root.classList.toggle('cc-avatar-heart',settings.avatarMode==='userHiddenHeart');
  root.classList.toggle('cc-dialogue-highlight',settings.dialogueHighlight===true);
+ root.classList.toggle('cc-button-safe-lane',settings.buttonSafeLane===true);
  updateDialogueHighlight();
  if(panel)for(const input of panel.querySelectorAll('input[name="cc-avatar-mode"]'))input.checked=input.value===settings.avatarMode;
  const highlightInput=panel?.querySelector('#cc-dialogue-highlight-toggle');
@@ -2612,6 +2647,7 @@ function applyOpts(){
  const narrationInput=panel?.querySelector('#cc-remove-narration-toggle');
  if(narrationInput)narrationInput.checked=settings.removeNarration===true;
  if(panel)for(const input of panel.querySelectorAll('input[name="cc-line-break-mode"]'))input.checked=input.value===settings.lineBreakMode;
+ if(panel)for(const input of panel.querySelectorAll('input[name="cc-button-safe-lane"]'))input.checked=(input.value==='on')===settings.buttonSafeLane;
 }
 const frameCapturedTimes=new WeakMap();
 function getTime(body){
@@ -3960,6 +3996,23 @@ function makeControls(){
  highlightCheckbox.addEventListener('change',()=>{settings.dialogueHighlight=highlightCheckbox.checked;save();applyOpts();});
  const highlightText=document.createElement('span');highlightText.textContent='대사 형광펜';
  highlightLabel.append(highlightCheckbox,highlightText);panel.appendChild(highlightLabel);
+
+ const safeLaneTitle=document.createElement('div');safeLaneTitle.className='cc-section-title';safeLaneTitle.textContent='버튼 여백';panel.appendChild(safeLaneTitle);
+ const safeLaneGroup=document.createElement('div');safeLaneGroup.className='cc-safe-lane-options';safeLaneGroup.setAttribute('role','radiogroup');safeLaneGroup.setAttribute('aria-label','오른쪽 버튼 여백');
+ for(const [value,title,hint] of [
+  ['on','오른쪽 여백 두기','화면이 조금 좁아져요'],
+  ['off','여백 없애기','화면이 조금 가려져요']
+ ]){
+  const label=document.createElement('label');label.className='cc-avatar-option cc-safe-lane-option';
+  const input=document.createElement('input');input.type='radio';input.name='cc-button-safe-lane';input.value=value;input.checked=(value==='on')===settings.buttonSafeLane;
+  input.addEventListener('change',()=>{if(!input.checked)return;settings.buttonSafeLane=value==='on';save();applyOpts();});
+  const copy=document.createElement('span');copy.className='cc-safe-lane-copy';
+  const titleText=document.createElement('span');titleText.className='cc-safe-lane-label';titleText.textContent=title;
+  const hintText=document.createElement('span');hintText.className='cc-safe-lane-hint';hintText.textContent=hint;
+  copy.append(titleText,hintText);label.append(input,copy);safeLaneGroup.appendChild(label);
+ }
+ panel.appendChild(safeLaneGroup);
+
  const narrationTitle=document.createElement('div');narrationTitle.className='cc-section-title';narrationTitle.textContent='줄바꿈 정리';panel.appendChild(narrationTitle);
  const outputGroup=document.createElement('div');outputGroup.className='cc-output-options';outputGroup.setAttribute('role','radiogroup');outputGroup.setAttribute('aria-label','줄바꿈 출력 방식');
  for(const [value,title] of [['short','짧은 출력'],['long','긴 출력']]){
@@ -4097,7 +4150,7 @@ function stop(){hideThemeLoadingScreen();if(ccCaptureMode)ccSetCaptureMode(false
   if(old.fill===null)svg.removeAttribute('fill');else svg.setAttribute('fill',old.fill);
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
- document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
+ document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight','cc-button-safe-lane');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
 document.addEventListener('click',onSendClick,true);
 document.addEventListener('keydown',onSendKey,true);
 
