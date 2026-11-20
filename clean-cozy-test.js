@@ -646,6 +646,30 @@ html.cc-tools-ready [data-sentry-component="QuickReplyButton"]{display:none!impo
   background:#FAFAFA;color:#33363A;font:12px/1.25 sans-serif;text-align:center;cursor:pointer;}
 #cc-panel .cc-action:disabled{color:#B4B6B9;cursor:not-allowed;opacity:.65;}
 #cc-panel .cc-action:not(:disabled):active{background:#EDEEEF;}
+#cc-panel .cc-action.cc-capture-active{
+ background:var(--cc-user)!important;
+ border-color:var(--cc-accent)!important;
+ color:var(--cc-accent-strong)!important;
+ font-weight:600!important;
+}
+/* New capture color blocks: original text remains untouched inside the wrapper.
+   Capture mode only paints a colored rectangle over the original name. */
+.cc-capture-token{
+ display:inline-block!important;
+ vertical-align:baseline!important;
+ background:var(--cc-capture-mask-color,#C9CDD3)!important;
+ border-radius:4px!important;
+ padding:0 .08em!important;
+ margin:0 .01em!important;
+ box-decoration-break:clone!important;
+ -webkit-box-decoration-break:clone!important;
+}
+.cc-capture-token>.cc-capture-source{
+ color:transparent!important;
+ -webkit-text-fill-color:transparent!important;
+ text-shadow:none!important;
+ white-space:inherit!important;
+}
 #cc-panel .cc-help{color:#898C90;font-size:11px;line-height:1.4;margin-top:10px}
 #cc-toggle{left:auto!important;right:12px;bottom:128px;}
 #cc-panel{left:auto!important;right:12px;bottom:171px;}
@@ -3269,6 +3293,395 @@ function pressLineTool(){
  lineEditOpenTimer=setTimeout(()=>{finishPendingLineEdit();lineEditPending=false;lineEditOpenTimer=null;},750);
 }
 
+
+/* ============================================================
+   Capture V1 — non-destructive visual masking
+   - No message text is replaced with {{...}}.
+   - Original name text stays inside .cc-capture-source.
+   - No extra MutationObserver / interval.
+   - Activation view + up to 5 newly reached turns per direction.
+   - Registered plot characters only: one pastel color block per character
+   - User: fixed gray block
+   - Temporary/generated mob speakers are intentionally untouched.
+   ============================================================ */
+let ccCaptureMode=false;
+let ccCaptureButton=null;
+let ccCaptureScrollRoot=null;
+let ccCaptureScrollTop=0;
+let ccCaptureScrollDirection=null;
+let ccCaptureScrollRAF=0;
+let ccCaptureAnchorMin=null;
+let ccCaptureAnchorMax=null;
+const CC_CAPTURE_LIMIT=5;
+const ccCaptureAllowed=new Set();
+const ccCaptureSeen={up:new Set(),down:new Set()};
+const ccCaptureChars=new Map(); // normalized speaker name -> {name, color}
+const ccCaptureUserNames=new Set();
+let ccCaptureHueSeed=0;
+const CC_CAPTURE_USER_COLOR='#C9CDD3';
+function ccCaptureColorForIndex(index){
+ const hue=(ccCaptureHueSeed+(index*47))%360;
+ return `hsl(${hue} 68% 80%)`;
+}
+
+function ccCaptureNorm(value){
+ return String(value||'').replace(/\s+/g,' ').trim();
+}
+function ccCaptureSpeakerName(body){
+ if(!(body instanceof HTMLElement))return '';
+ return ccCaptureNorm(
+  body.querySelector('.cc-meta-name')?.textContent||
+  body.querySelector('.caption1')?.textContent||
+  (FRAME_CHAT?frameNameLabel(body)?.textContent:'')||
+  ''
+ );
+}
+function ccCaptureHasRegisteredProfile(body){
+ if(!(body instanceof HTMLElement)||!body.matches('[data-sentry-component="LeftTextContent"]'))return false;
+ const avatar=[...body.children].find(
+  el=>el instanceof HTMLElement&&el.tagName==='BUTTON'
+ )||null;
+ const image=avatar?.querySelector('img[src],img[srcset]')||null;
+ return Boolean(
+  image&&(
+   (image.getAttribute('src')||'').trim()||
+   (image.getAttribute('srcset')||'').trim()||
+   (image.currentSrc||'').trim()
+  )
+ );
+}
+function ccCaptureTurnKey(rows,order){
+ const ids=[];
+ for(const body of rows){
+  const idx=rowIndex(body);
+  if(Number.isFinite(idx)){ids.push('i'+idx);continue;}
+  const key=messageKey(body);
+  if(key)ids.push('m'+key);
+ }
+ return ids.length?ids.join('|'):'o'+order;
+}
+function ccCaptureTurns(){
+ const bodies=[...currentRoomMessageBodies()];
+ const turns=[];
+ let current=null;
+ for(const body of bodies){
+  const isUser=body.matches('[data-sentry-component="RightTextContent"]');
+  if(isUser||!current){
+   current={rows:[body],order:turns.length,key:'',position:NaN};
+   turns.push(current);
+  }else{
+   current.rows.push(body);
+  }
+ }
+ for(const turn of turns){
+  turn.key=ccCaptureTurnKey(turn.rows,turn.order);
+  const indexes=turn.rows.map(rowIndex).filter(Number.isFinite);
+  turn.position=indexes.length?Math.min(...indexes):turn.order;
+ }
+ return turns;
+}
+function ccCaptureScrollContainer(){
+ const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
+ if(!log)return null;
+ let node=log;
+ while(node&&node!==document.body){
+  const style=getComputedStyle(node);
+  if(/auto|scroll/.test(style.overflowY||'')&&node.scrollHeight>node.clientHeight+4)return node;
+  node=node.parentElement;
+ }
+ return log;
+}
+function ccCaptureViewportRect(){
+ const root=ccCaptureScrollRoot||ccCaptureScrollContainer();
+ if(!root||root===document.body||root===document.documentElement){
+  return {top:0,bottom:innerHeight};
+ }
+ return root.getBoundingClientRect();
+}
+function ccCaptureVisibleTurns(turns){
+ const viewport=ccCaptureViewportRect();
+ return turns.filter(turn=>turn.rows.some(row=>{
+  const rect=row.getBoundingClientRect();
+  return rect.bottom>viewport.top+2&&rect.top<viewport.bottom-2;
+ }));
+}
+function ccCaptureAliases(name){
+ const value=ccCaptureNorm(name);
+ if(!value)return [];
+ const out=[value];
+ if(/^[가-힣]{3,}$/.test(value))out.push(value.slice(-2));
+ return [...new Set(out)];
+}
+function ccCaptureCollectIdentities(turns){
+ for(const turn of turns){
+  if(!ccCaptureAllowed.has(turn.key))continue;
+  for(const body of turn.rows){
+   const speaker=ccCaptureSpeakerName(body);
+   if(!speaker)continue;
+   if(body.matches('[data-sentry-component="RightTextContent"]')){
+    ccCaptureUserNames.add(speaker);
+    continue;
+   }
+   if(!ccCaptureHasRegisteredProfile(body))continue; // mob: untouched
+   const key=ccCaptureNorm(speaker);
+   if(!ccCaptureChars.has(key)){
+    ccCaptureChars.set(key,{
+     name:speaker,
+     color:ccCaptureColorForIndex(ccCaptureChars.size)
+    });
+   }
+  }
+ }
+}
+function ccCaptureReplacementEntries(){
+ const candidates=[];
+ let order=0;
+
+ for(const [charKey,record] of ccCaptureChars){
+  const aliases=ccCaptureAliases(record.name);
+  aliases.forEach((pattern,index)=>{
+   candidates.push({
+    pattern,
+    color:record.color,
+    owner:'char:'+charKey,
+    priority:index===0?3:1, // full character name > suffix alias
+    order:order++
+   });
+  });
+ }
+ for(const fullName of ccCaptureUserNames){
+  const aliases=ccCaptureAliases(fullName);
+  aliases.forEach((pattern,index)=>{
+   candidates.push({
+    pattern,
+    color:CC_CAPTURE_USER_COLOR,
+    owner:'user',
+    priority:index===0?3:1,
+    order:order++
+   });
+  });
+ }
+
+ // If the same short alias belongs to different people, do not guess.
+ // A full name beats someone else's suffix alias.
+ const chosen=new Map();
+ const ambiguous=new Set();
+ for(const item of candidates){
+  if(!item.pattern)continue;
+  const prev=chosen.get(item.pattern);
+  if(!prev){
+   chosen.set(item.pattern,item);
+   continue;
+  }
+  if(prev.owner===item.owner)continue;
+  if(item.priority>prev.priority){
+   chosen.set(item.pattern,item);
+   ambiguous.delete(item.pattern);
+  }else if(item.priority===prev.priority){
+   ambiguous.add(item.pattern);
+  }
+ }
+ for(const key of ambiguous)chosen.delete(key);
+ return [...chosen.values()].sort((a,b)=>
+  b.pattern.length-a.pattern.length||
+  b.priority-a.priority||
+  a.order-b.order
+ );
+}
+function ccCaptureNodeAllowed(node){
+ const parent=node?.parentElement;
+ if(!parent)return false;
+ if(parent.closest('.cc-capture-token'))return false;
+ if(parent.closest('#cc-panel,#cc-settings-backdrop,#cc-help-dialog,#cc-help-backdrop,#cc-toggle,#cc-edit-shortcut,#cc-line-shortcut'))return false;
+ if(parent.closest('textarea,input,[contenteditable="true"],script,style,button,a'))return false;
+ return true;
+}
+function ccCaptureFindNext(text,start,entries){
+ let best=null;
+ for(const entry of entries){
+  const index=text.indexOf(entry.pattern,start);
+  if(index<0)continue;
+  if(!best||index<best.index||(index===best.index&&entry.pattern.length>best.entry.pattern.length)){
+   best={index,entry};
+  }
+ }
+ return best;
+}
+function ccCaptureWrapTextNode(node,entries){
+ const text=node.nodeValue||'';
+ if(!text||!entries.length)return;
+ let cursor=0;
+ let hit=ccCaptureFindNext(text,cursor,entries);
+ if(!hit)return;
+
+ const frag=document.createDocumentFragment();
+ while(hit){
+  if(hit.index>cursor)frag.appendChild(document.createTextNode(text.slice(cursor,hit.index)));
+
+  const token=document.createElement('span');
+  token.className='cc-capture-token';
+  token.style.setProperty('--cc-capture-mask-color',hit.entry.color);
+
+  const source=document.createElement('span');
+  source.className='cc-capture-source';
+  source.textContent=hit.entry.pattern;
+  token.appendChild(source);
+  frag.appendChild(token);
+
+  cursor=hit.index+hit.entry.pattern.length;
+  hit=ccCaptureFindNext(text,cursor,entries);
+ }
+ if(cursor<text.length)frag.appendChild(document.createTextNode(text.slice(cursor)));
+ node.replaceWith(frag);
+}
+function ccCaptureMaskRow(row,entries){
+ const nodes=[];
+ const walker=document.createTreeWalker(row,NodeFilter.SHOW_TEXT);
+ let node;
+ while((node=walker.nextNode())){
+  if(ccCaptureNodeAllowed(node))nodes.push(node);
+ }
+ for(const textNode of nodes)ccCaptureWrapTextNode(textNode,entries);
+}
+function ccCaptureMaskAllowed(){
+ if(!ccCaptureMode)return;
+ const turns=ccCaptureTurns();
+ ccCaptureCollectIdentities(turns);
+ const entries=ccCaptureReplacementEntries();
+ if(!entries.length)return;
+ for(const turn of turns){
+  if(!ccCaptureAllowed.has(turn.key))continue;
+  for(const row of turn.rows)ccCaptureMaskRow(row,entries);
+ }
+}
+function ccCaptureUnwrapAll(){
+ const parents=new Set();
+ for(const token of document.querySelectorAll('.cc-capture-token')){
+  const source=token.querySelector(':scope > .cc-capture-source');
+  const parent=token.parentNode;
+  if(parent)parents.add(parent);
+  token.replaceWith(document.createTextNode(source?.textContent||''));
+ }
+ for(const parent of parents){
+  try{parent.normalize();}catch(e){}
+ }
+}
+function ccCaptureUpdateButton(){
+ if(!ccCaptureButton)return;
+ ccCaptureButton.classList.toggle('cc-capture-active',ccCaptureMode);
+ ccCaptureButton.setAttribute('aria-pressed',String(ccCaptureMode));
+ ccCaptureButton.textContent=ccCaptureMode?'캡쳐 해제':'캡쳐모드';
+ const up=ccCaptureSeen.up.size;
+ const down=ccCaptureSeen.down.size;
+ ccCaptureButton.title=ccCaptureMode
+  ? `등록 캐릭터 ${ccCaptureChars.size}명 · 위 ${up}/${CC_CAPTURE_LIMIT}턴 · 아래 ${down}/${CC_CAPTURE_LIMIT}턴`
+  : '현재 화면부터 위/아래 5턴 · 등록 캐릭터는 캐릭터별 다른 색 네모로 가립니다';
+}
+function ccCaptureExpandVisible(){
+ if(!ccCaptureMode)return;
+ const turns=ccCaptureTurns();
+ const visible=ccCaptureVisibleTurns(turns);
+ if(!visible.length)return;
+
+ if(ccCaptureAnchorMin===null||ccCaptureAnchorMax===null){
+  const positions=visible.map(t=>t.position).filter(Number.isFinite);
+  if(!positions.length)return;
+  ccCaptureAnchorMin=Math.min(...positions);
+  ccCaptureAnchorMax=Math.max(...positions);
+  for(const turn of visible)ccCaptureAllowed.add(turn.key);
+  ccCaptureMaskAllowed();
+  ccCaptureUpdateButton();
+  return;
+ }
+
+ const direction=ccCaptureScrollDirection;
+ if(direction!=='up'&&direction!=='down'){
+  ccCaptureMaskAllowed();
+  return;
+ }
+
+ const seen=ccCaptureSeen[direction];
+ for(const turn of visible){
+  if(seen.size>=CC_CAPTURE_LIMIT)break;
+  if(direction==='up'&&turn.position>=ccCaptureAnchorMin)continue;
+  if(direction==='down'&&turn.position<=ccCaptureAnchorMax)continue;
+  if(seen.has(turn.key))continue;
+  seen.add(turn.key);
+  ccCaptureAllowed.add(turn.key);
+ }
+ ccCaptureMaskAllowed();
+ ccCaptureUpdateButton();
+}
+function ccCaptureOnScroll(){
+ if(!ccCaptureMode||!ccCaptureScrollRoot)return;
+ const next=ccCaptureScrollRoot.scrollTop||0;
+ const delta=next-ccCaptureScrollTop;
+ if(Math.abs(delta)>=4){
+  ccCaptureScrollDirection=delta>0?'down':'up';
+  ccCaptureScrollTop=next;
+ }
+ if(ccCaptureScrollRAF)return;
+ ccCaptureScrollRAF=requestAnimationFrame(()=>{
+  ccCaptureScrollRAF=0;
+  ccCaptureExpandVisible();
+ });
+}
+function ccCaptureBindScroll(){
+ const root=ccCaptureScrollContainer();
+ if(root===ccCaptureScrollRoot)return;
+ if(ccCaptureScrollRoot)ccCaptureScrollRoot.removeEventListener('scroll',ccCaptureOnScroll);
+ ccCaptureScrollRoot=root;
+ if(root){
+  ccCaptureScrollTop=root.scrollTop||0;
+  root.addEventListener('scroll',ccCaptureOnScroll,{passive:true});
+ }
+}
+function ccCaptureUnbindScroll(){
+ if(ccCaptureScrollRoot)ccCaptureScrollRoot.removeEventListener('scroll',ccCaptureOnScroll);
+ ccCaptureScrollRoot=null;
+ if(ccCaptureScrollRAF)cancelAnimationFrame(ccCaptureScrollRAF);
+ ccCaptureScrollRAF=0;
+ ccCaptureScrollDirection=null;
+}
+function ccSetCaptureMode(enabled){
+ const next=enabled===true;
+ if(next===ccCaptureMode)return;
+ if(next){
+  ccCaptureMode=true;
+  ccCaptureAllowed.clear();
+  ccCaptureSeen.up.clear();
+  ccCaptureSeen.down.clear();
+  ccCaptureChars.clear();
+  ccCaptureUserNames.clear();
+  ccCaptureHueSeed=Math.floor(Math.random()*360);
+  ccCaptureAnchorMin=null;
+  ccCaptureAnchorMax=null;
+  ccCaptureScrollDirection=null;
+  ccCaptureBindScroll();
+  ccCaptureExpandVisible();
+ }else{
+  ccCaptureMode=false;
+  ccCaptureUnbindScroll();
+  ccCaptureUnwrapAll();
+  ccCaptureAllowed.clear();
+  ccCaptureSeen.up.clear();
+  ccCaptureSeen.down.clear();
+  ccCaptureChars.clear();
+  ccCaptureUserNames.clear();
+  ccCaptureAnchorMin=null;
+  ccCaptureAnchorMax=null;
+  schedule();
+ }
+ ccCaptureUpdateButton();
+}
+/* Existing mutation batcher calls this only while capture is active.
+   It handles React/lazy-rendered rows without any new observer or polling. */
+function ccApplyCaptureMode(){
+ if(!ccCaptureMode)return;
+ ccCaptureBindScroll();
+ ccCaptureExpandVisible();
+}
+
 /* V63 safe optimization stage 1:
    Batch repeated DOM mutations into one animation-frame pass.
    No dirty-row cache, no extra timer, no change to date/turn logic. */
@@ -3286,6 +3699,7 @@ function schedule(){
   updateDialogueHighlight();
   makeSendArrow();
   updateActionAvailability();
+  ccApplyCaptureMode();
   announceFrameControls();
  });
 }
@@ -3466,6 +3880,14 @@ function makeControls(){
   btn.addEventListener('click',()=>runOriginalAction(key));
   actionButtons.set(key,btn);list.appendChild(btn);
  }
+ if(FRAME_CHAT){
+  ccCaptureButton=document.createElement('button');
+  ccCaptureButton.className='cc-action';
+  ccCaptureButton.type='button';
+  ccCaptureButton.addEventListener('click',()=>ccSetCaptureMode(!ccCaptureMode));
+  list.appendChild(ccCaptureButton);
+  ccCaptureUpdateButton();
+ }
  const helpButton=document.createElement('button');
  helpButton.className='cc-action cc-help-open';
  helpButton.type='button';
@@ -3495,6 +3917,14 @@ function makeControls(){
     <div class="cc-help-lines">
      <div class="cc-help-line"><span class="cc-help-dot">•</span><span>플로팅 버튼을 드래그하면 도구모음에 넣을 수 있어요.</span></div>
      <div class="cc-help-line"><span class="cc-help-dot">•</span><span>호환 확인된 기능: 제타킷 · inPocket</span></div>
+    </div>
+   </section>
+   <section class="cc-help-card">
+    <div class="cc-help-card-title"><span class="cc-help-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4.5 7.5h3l1.5-2h6l1.5 2h3a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V9a1.5 1.5 0 0 1 1.5-1.5Z"/><circle cx="12" cy="13" r="3.5"/></svg></span><span>캡쳐모드</span></div>
+    <div class="cc-help-lines">
+     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>현재 화면부터 위·아래로 새로 도달한 5턴까지 가려요.</span></div>
+     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>플롯에 등록된 캐릭터는 캐릭터마다 다른 파스텔색 네모로 가리고 모브는 그대로 둬요.</span></div>
+     <div class="cc-help-line"><span class="cc-help-dot">•</span><span>유저 이름은 회색 네모로 가리며 원문 텍스트는 바꾸지 않아요.</span></div>
     </div>
    </section>
    <section class="cc-help-card">
@@ -3557,7 +3987,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
