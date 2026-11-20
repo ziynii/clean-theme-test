@@ -402,10 +402,19 @@ function showThemeLoadingScreen(){
    font:600 14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;
    letter-spacing:-.01em!important;
   }
+  #cc-theme-loading-screen .cc-theme-loading-wrap{
+   display:flex!important;flex-direction:column!important;align-items:center!important;gap:8px!important;
+  }
   #cc-theme-loading-screen .cc-theme-loading-inner{
    display:flex!important;align-items:center!important;gap:9px!important;
    padding:12px 16px!important;border:1px solid #E5E7EA!important;border-radius:999px!important;
    background:#FFFFFF!important;box-shadow:0 6px 24px rgba(0,0,0,.06)!important;
+  }
+  #cc-theme-loading-screen .cc-theme-loading-hint{
+   color:#9A9EA4!important;
+   font:400 11px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;
+   letter-spacing:-.01em!important;
+   text-align:center!important;
   }
   #cc-theme-loading-screen .cc-theme-loading-dot{
    width:7px!important;height:7px!important;border-radius:50%!important;
@@ -422,7 +431,7 @@ function showThemeLoadingScreen(){
  ccThemeLoadingScreen.id='cc-theme-loading-screen';
  ccThemeLoadingScreen.setAttribute('role','status');
  ccThemeLoadingScreen.setAttribute('aria-live','polite');
- ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div>';
+ ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">이 화면이 5초 이상 지속되면 새로고침 해주세요</div></div>';
  document.body.appendChild(ccThemeLoadingScreen);
  if(ccThemeLoadingFailsafe)clearTimeout(ccThemeLoadingFailsafe);
  ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),7000);
@@ -3751,6 +3760,21 @@ function ccApplyCaptureMode(){
  ccCaptureExpandVisible();
 }
 
+function ccEnsureFloatingControls(){
+ if(!FRAME_CHAT||!ccRuntimeStarted)return;
+ if(!ccHasEssentialChatDOM())return;
+
+ const toggleOk=!!document.getElementById('cc-toggle')?.isConnected;
+ const editOk=!!document.getElementById('cc-edit-shortcut')?.isConnected;
+ const lineOk=!!document.getElementById('cc-line-shortcut')?.isConnected;
+
+ if(toggleOk&&editOk&&lineOk)return;
+
+ // Restore only our three floating controls. Do not rerun the theme/runtime.
+ makeControls();
+ announceFrameControls(true);
+}
+
 /* V63 safe optimization stage 1:
    Batch repeated DOM mutations into one animation-frame pass.
    No dirty-row cache, no extra timer, no change to date/turn logic. */
@@ -3761,6 +3785,7 @@ function schedule(){
   scheduled=false;
   if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
   markFrameChatRoot();
+  ccEnsureFloatingControls();
   finishPendingLineEdit();
   enhance();
   enhanceHeader();
@@ -4094,7 +4119,10 @@ function ccStartRuntimeOnce(){
 
  // Chat-only floating controls are created only inside the real scene iframe.
  // The outer page never creates temporary duplicate buttons during refresh.
- if(FRAME_CHAT)makeControls();
+ if(FRAME_CHAT){
+  makeControls();
+  ccEnsureFloatingControls();
+ }
 
  resetTurnRoom();
  enhance();
