@@ -47,8 +47,7 @@ function announceFrameCoreReady(){
  if(!document.body?.classList.contains('cc-frame-chat-root'))return;
  const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
  const composer=document.querySelector('[data-testid="composer-input-box"]');
- const header=document.querySelector('[data-testid="chat-header-profile"]');
- if(!log||!composer||!header)return;
+ if(!log||!composer)return;
  ccFrameCoreReadySent=true;
  try{window.parent.postMessage({type:'clean-cozy-frame-core-ready-v1'},'https://zeta-ai.io');}catch(e){}
 }
@@ -2280,6 +2279,40 @@ body.cc-frame-chat-root #cc-toggle{right:8px!important;bottom:170px!important;le
 body.cc-frame-chat-root #cc-edit-shortcut{right:8px!important;bottom:214px!important;left:auto!important;top:auto!important;}
 body.cc-frame-chat-root #cc-line-shortcut{right:8px!important;bottom:258px!important;left:auto!important;top:auto!important;}
 `;
+
+if(FRAME_CHAT)style.textContent+=`
+/* FINAL mobile right safe lane.
+   Kept at the end of the theme CSS so older width/margin !important rules
+   cannot overwrite it. This reserves space only inside the chat log. */
+@media (max-width:700px){
+  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]{
+    padding-right:56px!important;
+    box-sizing:border-box!important;
+  }
+
+  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+  [data-sentry-component="LeftTextContent"],
+  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+  [data-sentry-component="RightTextContent"],
+  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+  [data-sentry-component="BodyView"],
+  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+  [data-sentry-component="NarratorBubble"]{
+    width:100%!important;
+    max-width:100%!important;
+    box-sizing:border-box!important;
+  }
+
+  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+  [data-sentry-component="LeftTextContent"],
+  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
+  [data-sentry-component="RightTextContent"]{
+    margin-left:0!important;
+    margin-right:0!important;
+  }
+}
+`;
+
 if(FRAME_CHAT)style.textContent+=`
 /* Extra frame styles based on the live edit panel and suggestions DOM. */
 body.cc-frame-chat-root header,
@@ -2375,7 +2408,7 @@ if(OUTER_ROOM)style.textContent+=`
    hides the parent settings and edit buttons unconditionally. */
 html:not(.cc-inner-controls-ready) body #cc-toggle,
 html:not(.cc-inner-controls-ready) body #cc-edit-shortcut,
-html:not(.cc-inner-controls-ready) body #cc-line-shortcut{display:flex!important;visibility:visible!important;}
+html:not(.cc-inner-controls-ready) body #cc-line-shortcut{display:none!important;visibility:hidden!important;}
 /* Never hide the genuine inner-frame buttons. Only hide parent duplicates,
    and ONLY after those frame buttons have confirmed they are present. */
 html.cc-inner-controls-ready #cc-toggle,
@@ -4024,7 +4057,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -4032,7 +4065,78 @@ function stop(){hideThemeLoadingScreen();if(ccCaptureMode)ccSetCaptureMode(false
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();announceFrameCoreReady();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+document.addEventListener('click',onSendClick,true);
+document.addEventListener('keydown',onSendKey,true);
+
+let ccRuntimeStarted=false;
+let ccBootstrapObserver=null;
+
+function ccHasEssentialChatDOM(){
+ if(!FRAME_CHAT)return true;
+ return !!(
+  document.querySelector('[role="log"][aria-label="Chat messages"]') &&
+  document.querySelector('[data-testid="composer-input-box"]')
+ );
+}
+
+function ccStartRuntimeOnce(){
+ if(ccRuntimeStarted)return;
+ if(FRAME_CHAT&&!ccHasEssentialChatDOM())return;
+
+ ccRuntimeStarted=true;
+ ccBootstrapObserver?.disconnect();
+ ccBootstrapObserver=null;
+
+ markFrameChatRoot();
+ applyOpts();
+
+ // Chat-only floating controls are created only inside the real scene iframe.
+ // The outer page never creates temporary duplicate buttons during refresh.
+ if(FRAME_CHAT)makeControls();
+
+ resetTurnRoom();
+ enhance();
+ enhanceHeader();
+ enhanceDates();
+ enhanceLetters();
+ makeSendArrow();
+ updateDialogueHighlight();
+ updateActionAvailability();
+ ccApplyCaptureMode();
+
+ announceFrameCoreReady();
+ announceFrameControls(true);
+
+ observer=new MutationObserver(schedule);
+ observer.observe(document.body,{childList:true,subtree:true});
+
+ dateRefreshTimer=setInterval(()=>{
+  markFrameChatRoot();
+  if(document.querySelector('.cc-meta-date'))schedule();
+ },60000);
+}
+
+if(FRAME_CHAT){
+ if(ccHasEssentialChatDOM()){
+  ccStartRuntimeOnce();
+ }else{
+  ccBootstrapObserver=new MutationObserver(()=>{
+   if(ccHasEssentialChatDOM())ccStartRuntimeOnce();
+  });
+  ccBootstrapObserver.observe(document.body,{childList:true,subtree:true});
+ }
+}else{
+ // Outer page: keep theme/site coordination, but never create chat floating controls.
+ applyOpts();
+ resetTurnRoom();
+ observer=new MutationObserver(schedule);
+ observer.observe(document.body,{childList:true,subtree:true});
+ dateRefreshTimer=setInterval(()=>{
+  if(document.querySelector('.cc-meta-date'))schedule();
+ },60000);
+}
+
+window[KEY]={stop,version:VERSION,palette:chosenKey};
 })();
 
 
