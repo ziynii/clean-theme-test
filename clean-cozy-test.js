@@ -41,11 +41,24 @@ function outerStableRoomKey(){
 // Cross-origin coordination between our own two userscript instances only.
 // No access to the other frame's DOM, Zeta data, or internal APIs.
 let ccLastFrameReadyAt=0;
+let ccFrameCoreReadySent=false;
+function announceFrameCoreReady(){
+ if(!FRAME_CHAT||ccFrameCoreReadySent)return;
+ if(!document.body?.classList.contains('cc-frame-chat-root'))return;
+ const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
+ const composer=document.querySelector('[data-testid="composer-input-box"]');
+ const header=document.querySelector('[data-testid="chat-header-profile"]');
+ if(!log||!composer||!header)return;
+ ccFrameCoreReadySent=true;
+ try{window.parent.postMessage({type:'clean-cozy-frame-core-ready-v1'},'https://zeta-ai.io');}catch(e){}
+}
 function announceFrameControls(force=false){
  if(!FRAME_CHAT||ccStableRoomKey)return;
  if(!document.body?.classList.contains('cc-frame-chat-root'))return;
  const button=document.getElementById('cc-toggle');
- if(!button||!button.isConnected)return;
+ const edit=document.getElementById('cc-edit-shortcut');
+ const line=document.getElementById('cc-line-shortcut');
+ if(!button?.isConnected||!edit?.isConnected||!line?.isConnected)return;
  const now=Date.now();
  if(!force&&now-ccLastFrameReadyAt<700)return;
  ccLastFrameReadyAt=now;
@@ -56,6 +69,10 @@ function onCozyFrameReady(event){
  const scene=document.querySelector('iframe[title="scene"][src^="https://frame.pingpong.ai/"]');
  if(!scene||event.source!==scene.contentWindow)return;
  const data=event.data;
+ if(data?.type==='clean-cozy-frame-core-ready-v1'){
+  hideThemeLoadingScreen();
+  return;
+ }
  if(data?.type==='clean-cozy-frame-controls-ready-v163'){
   // The outer zeta-ai.io document is the source of truth for saved UI settings.
   // Do not let the iframe's startup/default snapshot overwrite persisted choices.
@@ -64,7 +81,6 @@ function onCozyFrameReady(event){
   sendToCozyScene('turn-store',{room,turns:roomTurnRows(room)});
   sendToCozyScene('settings',settings);
   document.documentElement.classList.add('cc-inner-controls-ready');
-  hideThemeLoadingScreen();
   return;
  }
  if(data?.type==='cc-private-ui-v164'&&data.command==='turn-sync'){
@@ -374,6 +390,7 @@ document.getElementById(ID)?.remove();
 /* V86: mask the room until the iframe finishes its first full Clean Cozy pass. */
 let ccThemeLoadingScreen=null;
 let ccThemeLoadingStyle=null;
+let ccThemeLoadingFailsafe=0;
 function showThemeLoadingScreen(){
  if(!OUTER_ROOM||ccThemeLoadingScreen?.isConnected)return;
  ccThemeLoadingStyle=document.createElement('style');
@@ -408,6 +425,8 @@ function showThemeLoadingScreen(){
  ccThemeLoadingScreen.setAttribute('aria-live','polite');
  ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div>';
  document.body.appendChild(ccThemeLoadingScreen);
+ if(ccThemeLoadingFailsafe)clearTimeout(ccThemeLoadingFailsafe);
+ ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),7000);
 }
 function hideThemeLoadingScreen(){
  const screen=ccThemeLoadingScreen;
@@ -417,6 +436,10 @@ function hideThemeLoadingScreen(){
  }
  ccThemeLoadingStyle?.remove();
  ccThemeLoadingStyle=null;
+ if(ccThemeLoadingFailsafe){
+  clearTimeout(ccThemeLoadingFailsafe);
+  ccThemeLoadingFailsafe=0;
+ }
 }
 showThemeLoadingScreen();
 
@@ -619,6 +642,8 @@ a[testid^="room-list-item-"] span.body1{color:#25272A!important;-webkit-text-fil
   [role="log"][aria-label="Chat messages"] [data-sentry-component="BodyView"],
   [role="log"][aria-label="Chat messages"] [data-sentry-component="NarratorBubble"]{
     max-width:100%!important;
+    padding-right:54px!important;
+    box-sizing:border-box!important;
   }
   [data-sentry-component="ChatBubbleContainer"] .chat,
   [data-sentry-component="ChatBubbleContainer"] .chat p{font-size:14px!important;}
@@ -3701,6 +3726,7 @@ function schedule(){
   makeSendArrow();
   updateActionAvailability();
   ccApplyCaptureMode();
+  announceFrameCoreReady();
   announceFrameControls();
  });
 }
@@ -3996,7 +4022,7 @@ function stop(){hideThemeLoadingScreen();if(ccCaptureMode)ccSetCaptureMode(false
   delete svg.dataset.ccArrow;
  }sendOriginals.clear();
  document.querySelectorAll('.cc-meta-date').forEach(el=>el.remove());document.querySelectorAll('.cc-letter-meta').forEach(el=>el.remove());document.querySelectorAll('blockquote.cc-letter').forEach(el=>el.classList.remove('cc-letter'));document.querySelectorAll('.cc-mob-person-avatar').forEach(el=>el.remove());document.querySelectorAll('.cc-mob-native-avatar').forEach(el=>el.classList.remove('cc-mob-native-avatar'));document.querySelectorAll('.cc-mob-has-native').forEach(el=>el.classList.remove('cc-mob-has-native'));document.querySelectorAll('.cc-meta').forEach(el=>el.remove());for(const el of marked)el.classList.remove('cc-name-hidden');marked.clear();document.documentElement.classList.remove('cc-avatar-hidden','cc-avatar-user-hidden','cc-avatar-heart','cc-dialogue-highlight');style.remove();if(window[KEY]?.stop===stop)delete window[KEY];}
-document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
+document.addEventListener('click',onSendClick,true);document.addEventListener('keydown',onSendKey,true);dateRefreshTimer=setInterval(()=>{markFrameChatRoot();if(document.querySelector('.cc-meta-date'))schedule();},60000);markFrameChatRoot();applyOpts();makeControls();resetTurnRoom();enhance();enhanceHeader();enhanceDates();enhanceLetters();makeSendArrow();announceFrameCoreReady();announceFrameControls(true);observer=new MutationObserver(schedule);observer.observe(document.body,{childList:true,subtree:true});if(FRAME_CHAT){[400,900,1600,2800,4500].forEach(ms=>setTimeout(()=>announceFrameControls(true),ms));}window[KEY]={stop,version:VERSION,palette:chosenKey};if(FRAME_CHAT)setTimeout(()=>{markFrameChatRoot();if(!document.querySelector('.cc-frame-chat-root'))console.warn('[Clean Cozy] iframe에서 기존 채팅 선택자를 찾지 못했어요. 새 프레임 내부 HTML 확인이 필요합니다.');},3500);
 })();
 
 
