@@ -232,9 +232,8 @@ const CC_ZETA_MARK_SCAN_GAP=800;
 function hideFrameCharacterZetaMarks(row){
  if(!FRAME_CHAT||!row||row.matches('[data-sentry-component="RightTextContent"]'))return;
 
- // Once a visible Zeta mark is already hidden, do not repeat the expensive
- // geometry/computed-style scan on every streaming mutation.
- if(row.querySelector('.cc-zeta-mark-hidden,.cc-zeta-before-hidden,.cc-zeta-after-hidden'))return;
+ // Limit the expensive geometry/computed-style scan, but do not permanently
+ // skip a recycled Zeta row just because an older watermark was already hidden.
  const scanNow=performance.now();
  const lastScan=ccZetaMarkScanAt.get(row)||0;
  if(lastScan&&scanNow-lastScan<CC_ZETA_MARK_SCAN_GAP)return;
@@ -2756,7 +2755,7 @@ body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] bu
  color:var(--cc-accent-strong)!important;-webkit-text-fill-color:var(--cc-accent-strong)!important;
 }
 `;
-let panel=null,toggle=null,editShortcut=null,settingsBackdrop=null,settingsSaveButton=null,observer=null,scheduled=false;
+let panel=null,toggle=null,editShortcut=null,settingsBackdrop=null,settingsSaveButton=null,observer=null,scheduled=false,scheduleRaf=0,ccStopped=false;
 const sendOriginals=new Map();
 function makeSendArrow(){
  const svg=document.querySelector('[data-testid="chat-send-button"] svg');
@@ -2909,8 +2908,7 @@ function updateDialogueHighlight(){
    // Skip chats whose rendered text has not changed since the last successful pass.
    // This avoids running a TreeWalker over every old message on every DOM mutation.
    const rawText=chat.textContent||'';
-   const chatSig=rawText.length+'|'+rawText.slice(-40);
-   if(dialogueChatSignature.get(chat)===chatSig)continue;
+   if(dialogueChatSignature.get(chat)===rawText)continue;
 
    // Loading indicators in a *different* Swiper slide must not block
    // completed dialogue in this slide. Zeta keeps the next-slide spinner
@@ -2937,7 +2935,7 @@ function updateDialogueHighlight(){
     textNode.parentNode.insertBefore(span,textNode);
     span.appendChild(textNode);
    }
-   dialogueChatSignature.set(chat,chatSig);
+   dialogueChatSignature.set(chat,rawText);
   }
  }catch(error){console.warn('[Clean Cozy] 형광펜 적용 중 오류',error);}
  finally{dialogueUpdating=false;}
@@ -3002,23 +3000,36 @@ function characterLetterTime(body){
  return new Date(iso).toLocaleTimeString('ko-KR',{hour:'numeric',minute:'2-digit'});
 }
 // A new scene row no longer exposes message IDs. Fingerprint its rendered message
-// locally (never store the message text) so timestamps survive a page reload.
+// locally (never persist the message text) so timestamps survive a page reload.
+// Cache only in memory while the visible text is unchanged, avoiding repeated
+// clone/hash work when several date helpers ask for the same key in one DOM state.
+const frameMessageKeyCache=new WeakMap();
 function frameMessageKey(body){
  const bubble=body.querySelector('[data-sentry-component="ChatBubbleContainer"]');
  if(!bubble)return '';
  const chat=bubble.querySelector('.chat');
+ const source=chat||bubble;
+ const rawText=source.textContent||'';
+ const cached=frameMessageKeyCache.get(body);
+ if(cached&&cached.rawText===rawText)return cached.key;
+
  // Ignore labels/cards injected by this theme, so the key stays identical
  // before and after rendering or when the theme is toggled.
- const copy=(chat||bubble).cloneNode(true);
+ const copy=source.cloneNode(true);
  copy.querySelectorAll('.cc-meta,.cc-letter-meta,.cc-meta-date,.cc-meta-time').forEach(x=>x.remove());
  let content=(copy.textContent||'').replace(/\s+/g,' ').trim();
- if(!content)return '';
+ if(!content){
+  frameMessageKeyCache.set(body,{rawText,key:''});
+  return '';
+ }
  let hash=2166136261;
  for(let i=0;i<content.length;i++){
   hash^=content.charCodeAt(i);
   hash=Math.imul(hash,16777619);
  }
- return 'scene-'+(body.matches('[data-sentry-component="RightTextContent"]')?'u':'c')+'-'+content.length+'-'+(hash>>>0).toString(36);
+ const key='scene-'+(body.matches('[data-sentry-component="RightTextContent"]')?'u':'c')+'-'+content.length+'-'+(hash>>>0).toString(36);
+ frameMessageKeyCache.set(body,{rawText,key});
+ return key;
 }
 function messageKey(body){
  // Prefer stable Zeta identifiers where they exist; otherwise use the rendered
@@ -4149,18 +4160,21 @@ function ccEnsureFloatingControls(){
 
 /* V63 safe optimization stage 1:
    Batch repeated DOM mutations into one animation-frame pass. */
-/* V32 safe performance cleanup:
-   - debounce turn-store sync during streaming
-   - replace transient per-view reply fingerprints instead of accumulating them
-   - throttle expensive watermark geometry scans
-   - skip unchanged dialogue TreeWalker passes
-   - throttle native action discovery
+/* V33 stability cleanup:
+   - keep V32's streaming/save/action throttles
+   - cancel stale startup timers and queued main RAF on stop
+   - remove quickbar listeners cleanly on replacement
+   - cache date-message fingerprints while rendered text is unchanged
+   - use exact text equality for dialogue cache
+   - keep watermark scan throttled without permanently skipping recycled rows
    Visual/layout CSS is intentionally untouched. */
 function schedule(){
- if(scheduled)return;
+ if(ccStopped||scheduled)return;
  scheduled=true;
- requestAnimationFrame(()=>{
+ scheduleRaf=requestAnimationFrame(()=>{
+  scheduleRaf=0;
   scheduled=false;
+  if(ccStopped)return;
   if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
   markFrameChatRoot();
   ccEnsureFloatingControls();
@@ -4507,7 +4521,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){ccStopped=true;ccRuntimeStarted=false;if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -4520,6 +4534,7 @@ document.addEventListener('keydown',onSendKey,true);
 
 let ccRuntimeStarted=false;
 let ccBootstrapObserver=null;
+let ccStartupTimers=[];
 
 function ccHasEssentialChatDOM(){
  if(!FRAME_CHAT)return true;
@@ -4566,8 +4581,8 @@ function ccStartRuntimeOnce(){
 
  // Zeta can finish hydrating message rows after the chat log/composer already exist.
  // Re-run the normal DOM pass a few times during startup only; no permanent polling.
- [300,700,1400,2500,4000].forEach(ms=>setTimeout(()=>{
-  if(ccRuntimeStarted) schedule();
+ ccStartupTimers=[300,700,1400,2500,4000].map(ms=>setTimeout(()=>{
+  if(ccRuntimeStarted&&!ccStopped) schedule();
  },ms));
 
  dateRefreshTimer=setInterval(()=>{
@@ -6376,6 +6391,14 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   let userMoved = false;
   let drag = null;
   let suppressNextClick = false;
+  const quickDisposers = [];
+
+  function qOn(target, type, handler, options) {
+    target.addEventListener(type, handler, options);
+    quickDisposers.push(() => {
+      try { target.removeEventListener(type, handler, options); } catch (_) {}
+    });
+  }
 
   const cleanText = value => String(value || '').replace(/\s+/g, ' ').trim();
   const clamp = (v, min, max) => Math.min(Math.max(v, min), Math.max(min, max));
@@ -6408,7 +6431,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
   function installStoreBridge() {
     if (w.top === w) {
-      w.addEventListener('message', event => {
+      qOn(w, 'message', event => {
         if (!FRAME_RE.test(event.origin)) return;
         const data = event.data;
         if (!data || data.channel !== STORE_CHANNEL || !event.source) return;
@@ -6435,7 +6458,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       return;
     }
 
-    w.addEventListener('message', event => {
+    qOn(w, 'message', event => {
       if (!TOP_RE.test(event.origin)) return;
       const data = event.data;
       if (!data || data.channel !== STORE_CHANNEL || data.type !== 'reply') return;
@@ -6583,7 +6606,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       return;
     }
 
-    w.addEventListener('message', event => {
+    qOn(w, 'message', event => {
       if (!FRAME_RE.test(event.origin)) return;
       const data = event.data;
       if (!data || data.channel !== ACCENT_CHANNEL) return;
@@ -6815,11 +6838,11 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       event.stopPropagation();
     };
 
-    el.addEventListener('pointerdown', onDown, true);
-    el.addEventListener('pointermove', onMove, true);
-    el.addEventListener('pointerup', finish, true);
-    el.addEventListener('pointercancel', finish, true);
-    el.addEventListener('click', suppressClick, true);
+    qOn(el, 'pointerdown', onDown, true);
+    qOn(el, 'pointermove', onMove, true);
+    qOn(el, 'pointerup', finish, true);
+    qOn(el, 'pointercancel', finish, true);
+    qOn(el, 'click', suppressClick, true);
   }
 
   function applyStyle(el, force = false) {
@@ -6871,7 +6894,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     observer = new MutationObserver(queueDiscover);
     observer.observe(d.documentElement, { childList: true, subtree: true });
 
-    w.addEventListener('resize', () => {
+    qOn(w, 'resize', () => {
       if (!barEl?.isConnected) return;
       clampPos(barEl);
       applyStyle(barEl, true);
@@ -6890,6 +6913,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     clearInterval(paintTimer);
     observer?.disconnect();
     pendingStore.clear();
+    quickDisposers.splice(0).forEach(fn => { try { fn(); } catch (_) {} });
 
     if (barEl?.isConnected) {
       barEl.removeAttribute(MARK_ATTR);
@@ -6902,5 +6926,5 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   w[INSTANCE_KEY] = { stop, rescan: discover };
 
   if (d.documentElement) start();
-  else d.addEventListener('DOMContentLoaded', start, { once: true });
+  else qOn(d, 'DOMContentLoaded', start, { once: true });
 })();
