@@ -227,8 +227,18 @@ if(FRAME_CHAT)window.addEventListener('message',receiveCozyUIMessage);
 
 // The outer Zeta page and the scene iframe have separate documents and origins.
 // Mark only a visible chat subtree once Zeta has actually rendered chat elements.
+const ccZetaMarkScanAt=new WeakMap();
+const CC_ZETA_MARK_SCAN_GAP=800;
 function hideFrameCharacterZetaMarks(row){
  if(!FRAME_CHAT||!row||row.matches('[data-sentry-component="RightTextContent"]'))return;
+
+ // Once a visible Zeta mark is already hidden, do not repeat the expensive
+ // geometry/computed-style scan on every streaming mutation.
+ if(row.querySelector('.cc-zeta-mark-hidden,.cc-zeta-before-hidden,.cc-zeta-after-hidden'))return;
+ const scanNow=performance.now();
+ const lastScan=ccZetaMarkScanAt.get(row)||0;
+ if(lastScan&&scanNow-lastScan<CC_ZETA_MARK_SCAN_GAP)return;
+ ccZetaMarkScanAt.set(row,scanNow);
 
  const normalize=v=>String(v||'').replace(/^['"]|['"]$/g,'').trim().toLowerCase();
  const blocked=el=>{
@@ -2877,6 +2887,7 @@ function save(){
    This avoids a remove/re-wrap race when Zeta re-renders its messages. */
 const dialogueInlineClass='cc-dialogue-inline';
 let dialogueUpdating=false;
+const dialogueChatSignature=new WeakMap();
 function clearInlineDialogue(){
  const spans=document.querySelectorAll('span.'+dialogueInlineClass);
  for(const span of spans){
@@ -2895,6 +2906,12 @@ function updateDialogueHighlight(){
    '[data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"] .chat'
   );
   for(const chat of chats){
+   // Skip chats whose rendered text has not changed since the last successful pass.
+   // This avoids running a TreeWalker over every old message on every DOM mutation.
+   const rawText=chat.textContent||'';
+   const chatSig=rawText.length+'|'+rawText.slice(-40);
+   if(dialogueChatSignature.get(chat)===chatSig)continue;
+
    // Loading indicators in a *different* Swiper slide must not block
    // completed dialogue in this slide. Zeta keeps the next-slide spinner
    // mounted even after the visible candidate has finished rendering.
@@ -2920,6 +2937,7 @@ function updateDialogueHighlight(){
     textNode.parentNode.insertBefore(span,textNode);
     span.appendChild(textNode);
    }
+   dialogueChatSignature.set(chat,chatSig);
   }
  }catch(error){console.warn('[Clean Cozy] 형광펜 적용 중 오류',error);}
  finally{dialogueUpdating=false;}
@@ -3216,6 +3234,8 @@ let turnRoomPath='';
 let knownViewKeys=new Set();
 let knownViewElements=new WeakSet();
 const liveTurnTimes=new WeakMap();
+const turnCharacterKeyByView=new WeakMap();
+let turnSaveTimer=0;
 function currentRoomMessageBodies(){
  return document.querySelectorAll(':is([data-sentry-component="ChatRoomReadyView"],.cc-frame-chat-root) :is([data-sentry-component="LeftTextContent"],[data-sentry-component="RightTextContent"])');
 }
@@ -3281,12 +3301,38 @@ function beginTurnCapture(iso){
 function saveTurns(){
  if(turns.length>TURN_LIMIT)turns=turns.slice(-TURN_LIMIT);
  if(FRAME_CHAT){
-  // The iframe keeps only the in-memory working copy.
-  // Persistent writes live on zeta-ai.io so Safari refreshes do not lose them.
-  syncTurnStoreToOuter();
+  // Streaming can mutate the rendered reply many times per second.
+  // Coalesce those mutations into one parent sync after the DOM settles.
+  if(turnSaveTimer)clearTimeout(turnSaveTimer);
+  turnSaveTimer=setTimeout(()=>{
+   turnSaveTimer=0;
+   syncTurnStoreToOuter();
+  },300);
   return;
  }
  try{localStorage.setItem(TURN_STORE,JSON.stringify(turns));}catch(e){}
+}
+function rememberTurnCharacterKey(record,view,key){
+ if(!record||!view||!key)return false;
+ if(!Array.isArray(record.characters))record.characters=[];
+
+ let changed=false;
+ const previousState=turnCharacterKeyByView.get(view);
+ const previous=previousState?.record===record?previousState.key:'';
+
+ // During streaming the text fingerprint changes every few tokens.
+ // Replace the previous transient fingerprint for this exact DOM view
+ // instead of appending every partial reply to persistent history.
+ if(previous&&previous!==key){
+  const at=record.characters.indexOf(previous);
+  if(at>=0){record.characters.splice(at,1);changed=true;}
+  if(record.character===previous){record.character=key;changed=true;}
+ }
+ if(!record.character){record.character=key;changed=true;}
+ if(!record.characters.includes(key)){record.characters.push(key);changed=true;}
+
+ turnCharacterKeyByView.set(view,{record,key});
+ return changed;
 }
 function recordUserTurn(body,time){
  const user=scopedKey(body);
@@ -3413,24 +3459,14 @@ function enhanceDates(){
   if(adjacent){
    const record=turnPending.user;
    liveTurnTimes.set(view,record.time);
-   if(key){
-    if(!record.character)record.character=key;
-    if(!Array.isArray(record.characters))record.characters=[];
-    if(!record.characters.includes(key)){record.characters.push(key);saveTurns();}
-   }
+   if(key&&rememberTurnCharacterKey(record,view,key))saveTurns();
    turnPending.characterFound=true;
   }else if(!turnForBody(body)){
    // Recover stable local-reply ids, when user and character share the same visible turn.
    const match=nearestUserTurn(body);
    if(match){
     liveTurnTimes.set(view,match.time);
-    if(key){
-     let changed=false;
-     if(!match.character){match.character=key;changed=true;}
-     if(!Array.isArray(match.characters))match.characters=[];
-     if(!match.characters.includes(key)){match.characters.push(key);changed=true;}
-     if(changed)saveTurns();
-    }
+    if(key&&rememberTurnCharacterKey(match,view,key))saveTurns();
    }
   }
  }
@@ -4112,8 +4148,14 @@ function ccEnsureFloatingControls(){
 }
 
 /* V63 safe optimization stage 1:
-   Batch repeated DOM mutations into one animation-frame pass.
-   No dirty-row cache, no extra timer, no change to date/turn logic. */
+   Batch repeated DOM mutations into one animation-frame pass. */
+/* V32 safe performance cleanup:
+   - debounce turn-store sync during streaming
+   - replace transient per-view reply fingerprints instead of accumulating them
+   - throttle expensive watermark geometry scans
+   - skip unchanged dialogue TreeWalker passes
+   - throttle native action discovery
+   Visual/layout CSS is intentionally untouched. */
 function schedule(){
  if(scheduled)return;
  scheduled=true;
@@ -4205,7 +4247,21 @@ function availableNativeAction(key){
  return null;
 }
 
-function updateActionAvailability(){
+let ccActionAvailabilityTimer=0;
+let ccActionAvailabilityLast=0;
+function updateActionAvailability(force=false){
+ const now=performance.now();
+ const elapsed=now-ccActionAvailabilityLast;
+ if(!force&&elapsed<250){
+  if(!ccActionAvailabilityTimer){
+   ccActionAvailabilityTimer=setTimeout(()=>{
+    ccActionAvailabilityTimer=0;
+    updateActionAvailability(true);
+   },Math.max(16,250-elapsed));
+  }
+  return;
+ }
+ ccActionAvailabilityLast=now;
  if(OUTER_ROOM){
   if(editShortcut){editShortcut.disabled=false;editShortcut.title='채팅 프레임에 수정창 열기 요청';}
   if(lineShortcut){lineShortcut.disabled=false;lineShortcut.title='채팅 프레임에 줄 정리 요청';}
@@ -4451,7 +4507,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
