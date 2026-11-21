@@ -42,14 +42,50 @@ function outerStableRoomKey(){
 // No access to the other frame's DOM, Zeta data, or internal APIs.
 let ccLastFrameReadyAt=0;
 let ccFrameCoreReadySent=false;
-function announceFrameCoreReady(){
- if(!FRAME_CHAT||ccFrameCoreReadySent)return;
- if(!document.body?.classList.contains('cc-frame-chat-root'))return;
+let ccFrameCoreReadyTimer=0;
+
+function ccFrameThemeLooksReady(){
+ if(!FRAME_CHAT)return false;
+ if(!style?.isConnected)return false;
+ if(!document.body?.classList.contains('cc-frame-chat-root'))return false;
+
  const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
  const composer=document.querySelector('[data-testid="composer-input-box"]');
- if(!log||!composer)return;
- ccFrameCoreReadySent=true;
- try{window.parent.postMessage({type:'clean-cozy-frame-core-ready-v1'},'https://zeta-ai.io');}catch(e){}
+ if(!log||!composer)return false;
+
+ // The header model button is a reliable visual canary:
+ // Clean Cozy hides it only after the real theme CSS is active.
+ const modelButton=document.querySelector('header [data-testid="chat-header-model"]');
+ if(modelButton && getComputedStyle(modelButton).display!=='none')return false;
+
+ // If rendered chat rows are already present, at least one real bubble must
+ // have completed Clean Cozy's DOM marking before the loading mask disappears.
+ const renderedRows=log.querySelectorAll('div.flex.flex-row.items-start');
+ if(renderedRows.length && !log.querySelector('[data-sentry-component="ChatBubbleContainer"]'))return false;
+
+ return true;
+}
+
+function announceFrameCoreReady(){
+ if(!FRAME_CHAT||ccFrameCoreReadySent)return;
+
+ if(!ccFrameThemeLooksReady()){
+  if(ccFrameCoreReadyTimer){
+   clearTimeout(ccFrameCoreReadyTimer);
+   ccFrameCoreReadyTimer=0;
+  }
+  return;
+ }
+
+ // Do not accept a transient pre-hydration frame. Require the themed state
+ // to still be valid after a short stability window.
+ if(ccFrameCoreReadyTimer)return;
+ ccFrameCoreReadyTimer=setTimeout(()=>{
+  ccFrameCoreReadyTimer=0;
+  if(ccFrameCoreReadySent||!ccFrameThemeLooksReady())return;
+  ccFrameCoreReadySent=true;
+  try{window.parent.postMessage({type:'clean-cozy-frame-core-ready-v1'},'https://zeta-ai.io');}catch(e){}
+ },350);
 }
 function announceFrameControls(force=false){
  if(!FRAME_CHAT||ccStableRoomKey)return;
@@ -243,37 +279,15 @@ function markFrameChatRoot(){
  const composerDock=composer?.closest('[class*="bg-linear-to-b"]');
  if(composerDock&&!composerDock.hasAttribute('data-sentry-component'))composerDock.setAttribute('data-sentry-component','ChatComposer');
  // Old Zeta exposed named sentry wrappers. New Zeta renders left/right rows directly.
- // Keep the known class match as the first choice, but fall back to rendered geometry
- // because Zeta can recycle rows with slightly different Tailwind class combinations.
  for(const row of log.querySelectorAll('div.flex.flex-row.items-start')){
   const cls=row.classList;
+  const isUser=cls.contains('ml-auto')&&cls.contains('pr-2');
+  const isCharacter=cls.contains('pl-2')&&cls.contains('pr-[72px]');
+  if(!isUser&&!isCharacter)continue;
   const bubble=[...row.querySelectorAll('div')].find(el=>
    el.classList.contains('w-fit')&&el.classList.contains('flex-col')&&
    (el.classList.contains('rounded-r-xl')||el.classList.contains('rounded-l-xl')));
   if(!bubble)continue;
-
-  const existingRole=row.getAttribute('data-sentry-component');
-  let isUser=existingRole==='RightTextContent'||(cls.contains('ml-auto')&&cls.contains('pr-2'));
-  let isCharacter=existingRole==='LeftTextContent'||(cls.contains('pl-2')&&cls.contains('pr-[72px]'));
-
-  if(!isUser&&!isCharacter){
-   const directAvatar=[...row.children].find(el=>
-    el instanceof HTMLElement&&el.tagName==='BUTTON'&&el.querySelector('img')
-   )||row.querySelector(':scope > button:has(img)');
-   if(directAvatar){
-    const avatarRect=directAvatar.getBoundingClientRect();
-    const bubbleRect=bubble.getBoundingClientRect();
-    if(avatarRect.left>=bubbleRect.right-2)isUser=true;
-    else if(avatarRect.right<=bubbleRect.left+2)isCharacter=true;
-   }
-  }
-
-  if(!isUser&&!isCharacter){
-   if(cls.contains('justify-end'))isUser=true;
-   else if(cls.contains('justify-start'))isCharacter=true;
-  }
-
-  if(!isUser&&!isCharacter)continue;
   const role=isUser?'RightTextContent':'LeftTextContent';
   if(row.getAttribute('data-sentry-component')!==role)row.setAttribute('data-sentry-component',role);
   if(!bubble.hasAttribute('data-sentry-component'))bubble.setAttribute('data-sentry-component','ChatBubbleContainer');
@@ -1699,6 +1713,32 @@ svg[data-sentry-source-file="NarratorBubble.tsx"][data-sentry-element="TextIcon"
 [data-sentry-component="DeleteModeBottom"] button{
  background:#C35257!important;color:#FFFFFF!important;
  -webkit-text-fill-color:#FFFFFF!important;border:0!important;
+}
+
+/* V25 — delete-start selection header/footer in the new iframe. */
+body.cc-frame-chat-root div.shrink-0.bg-gray-main.px-4.pb-6.title20{
+ background:#FFFFFF!important;
+ background-image:none!important;
+ color:var(--cc-text)!important;
+ -webkit-text-fill-color:var(--cc-text)!important;
+ border-bottom:1px solid var(--cc-stroke)!important;
+}
+body.cc-frame-chat-root div.flex.bg-gray-main.px-4:has(>button[class~="h-[48px]"][class~="w-full"]){
+ background:#FFFFFF!important;
+ background-image:none!important;
+ border-top:1px solid var(--cc-stroke)!important;
+}
+body.cc-frame-chat-root div.flex.bg-gray-main.px-4:has(>button[class~="h-[48px]"][class~="w-full"]) > button{
+ background:#C35257!important;
+ color:#FFFFFF!important;
+ -webkit-text-fill-color:#FFFFFF!important;
+ border:0!important;
+ box-shadow:none!important;
+}
+body.cc-frame-chat-root div.flex.bg-gray-main.px-4:has(>button[class~="h-[48px]"][class~="w-full"]) > button:disabled{
+ background:#ECEEF0!important;
+ color:#A1A4AB!important;
+ -webkit-text-fill-color:#A1A4AB!important;
 }
 :is([data-sentry-component="CaptureModeBottom"],[data-sentry-component="DeleteModeBottom"]) button:disabled{
  background:#E0E2E5!important;color:#989DA4!important;
@@ -4165,7 +4205,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -4221,6 +4261,12 @@ function ccStartRuntimeOnce(){
 
  observer=new MutationObserver(schedule);
  observer.observe(document.documentElement,{childList:true,subtree:true});
+
+ // Zeta can finish hydrating message rows after the chat log/composer already exist.
+ // Re-run the normal DOM pass a few times during startup only; no permanent polling.
+ [300,700,1400,2500,4000].forEach(ms=>setTimeout(()=>{
+  if(ccRuntimeStarted) schedule();
+ },ms));
 
  dateRefreshTimer=setInterval(()=>{
   markFrameChatRoot();
