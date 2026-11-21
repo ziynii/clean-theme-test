@@ -227,17 +227,38 @@ if(FRAME_CHAT)window.addEventListener('message',receiveCozyUIMessage);
 
 // The outer Zeta page and the scene iframe have separate documents and origins.
 // Mark only a visible chat subtree once Zeta has actually rendered chat elements.
-const ccZetaMarkScanAt=new WeakMap();
-const CC_ZETA_MARK_SCAN_GAP=800;
+const ccZetaMarkScannedRows=new WeakSet();
+const ccZetaMarkDirtyRows=new WeakSet();
+
+function ccMarkZetaRowsDirty(records){
+ if(!FRAME_CHAT||!records?.length)return;
+ for(const mutation of records){
+  let target=mutation.target;
+  if(target?.nodeType===Node.TEXT_NODE)target=target.parentElement;
+  if(!(target instanceof Element))continue;
+
+  const row=target.closest('div.flex.flex-row.items-start');
+  if(!row)continue;
+
+  // Streaming text inside the actual message bubble must NOT retrigger the
+  // expensive watermark geometry/style scan.
+  if(target.closest(
+   '[data-sentry-component="ChatBubbleContainer"],.chat,.cc-meta,'+
+   '#cc-toggle,#cc-edit-shortcut,#cc-line-shortcut,#cc-panel'
+  ))continue;
+
+  ccZetaMarkDirtyRows.add(row);
+ }
+}
+
 function hideFrameCharacterZetaMarks(row){
  if(!FRAME_CHAT||!row||row.matches('[data-sentry-component="RightTextContent"]'))return;
 
- // Limit the expensive geometry/computed-style scan, but do not permanently
- // skip a recycled Zeta row just because an older watermark was already hidden.
- const scanNow=performance.now();
- const lastScan=ccZetaMarkScanAt.get(row)||0;
- if(lastScan&&scanNow-lastScan<CC_ZETA_MARK_SCAN_GAP)return;
- ccZetaMarkScanAt.set(row,scanNow);
+ // First appearance: scan once.
+ // Later: only rescan when DOM outside the message bubble changed for this row.
+ if(ccZetaMarkScannedRows.has(row)&&!ccZetaMarkDirtyRows.has(row))return;
+ ccZetaMarkDirtyRows.delete(row);
+ ccZetaMarkScannedRows.add(row);
 
  const normalize=v=>String(v||'').replace(/^['"]|['"]$/g,'').trim().toLowerCase();
  const blocked=el=>{
@@ -350,7 +371,10 @@ function markFrameChatRoot(){
    (el.classList.contains('rounded-r-xl')||el.classList.contains('rounded-l-xl')));
   if(!bubble)continue;
   const role=isUser?'RightTextContent':'LeftTextContent';
-  if(row.getAttribute('data-sentry-component')!==role)row.setAttribute('data-sentry-component',role);
+  if(row.getAttribute('data-sentry-component')!==role){
+   ccZetaMarkDirtyRows.add(row);
+   row.setAttribute('data-sentry-component',role);
+  }
   if(bubble.getAttribute('data-sentry-component')!=='ChatBubbleContainer')bubble.setAttribute('data-sentry-component','ChatBubbleContainer');
   // Leave Zeta's own text tree alone. Map only a direct content wrapper if present.
   const textChild=[...bubble.children].find(el=>el.classList.contains('chat'));
@@ -4160,14 +4184,11 @@ function ccEnsureFloatingControls(){
 
 /* V63 safe optimization stage 1:
    Batch repeated DOM mutations into one animation-frame pass. */
-/* V33 stability cleanup:
-   - keep V32's streaming/save/action throttles
-   - cancel stale startup timers and queued main RAF on stop
-   - remove quickbar listeners cleanly on replacement
-   - cache date-message fingerprints while rendered text is unchanged
-   - use exact text equality for dialogue cache
-   - keep watermark scan throttled without permanently skipping recycled rows
-   Visual/layout CSS is intentionally untouched. */
+/* V35 targeted watermark stability fix:
+   Keep all V33 cleanup behavior, but make the expensive Zeta-mark scan dirty-row
+   driven: first scan once, then rescan only when DOM outside the message bubble
+   actually changes. Streaming message text does not retrigger it.
+   Visual/layout CSS and startup order are intentionally untouched. */
 function schedule(){
  if(ccStopped||scheduled)return;
  scheduled=true;
@@ -4576,7 +4597,10 @@ function ccStartRuntimeOnce(){
  announceFrameCoreReady();
  announceFrameControls(true);
 
- observer=new MutationObserver(schedule);
+ observer=new MutationObserver(records=>{
+  ccMarkZetaRowsDirty(records);
+  schedule();
+ });
  observer.observe(document.documentElement,{childList:true,subtree:true});
 
  // Zeta can finish hydrating message rows after the chat log/composer already exist.
