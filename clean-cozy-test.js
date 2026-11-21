@@ -1715,6 +1715,96 @@ svg[data-sentry-source-file="NarratorBubble.tsx"][data-sentry-element="TextIcon"
  -webkit-text-fill-color:#FFFFFF!important;border:0!important;
 }
 
+
+/* V26 — native message action bottom sheet, new iframe DOM.
+   Presentation only: keep every native button and handler untouched. */
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light){
+ background:#FFFFFF!important;
+ background-image:none!important;
+ color:var(--cc-text)!important;
+ border:1px solid var(--cc-stroke)!important;
+ border-bottom:0!important;
+ box-shadow:0 -8px 28px rgba(35,38,45,.08)!important;
+}
+
+/* Drag handle */
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+> div:first-child svg{
+ color:#C7CBD1!important;
+ -webkit-text-fill-color:#C7CBD1!important;
+}
+
+/* Normal action buttons */
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+button.bg-gray-sub2{
+ background:#FAFAFB!important;
+ background-image:none!important;
+ color:#3F434A!important;
+ border-color:#E8E9EC!important;
+ box-shadow:none!important;
+}
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+button.bg-gray-sub2:not(:disabled):active{
+ background:#F0F1F3!important;
+}
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+button.bg-gray-sub2 :is(span,svg){
+ color:#3F434A!important;
+ -webkit-text-fill-color:#3F434A!important;
+}
+
+/* Dividers between grouped actions */
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+div[class*="border-b-white/5"] > button:not(:last-child){
+ border-bottom-color:#E8E9EC!important;
+}
+
+/* Disabled actions */
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+button.bg-gray-sub2:disabled{
+ background:#F4F5F6!important;
+ color:#B5B8BD!important;
+}
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+button.bg-gray-sub2:disabled :is(span,svg){
+ color:#B5B8BD!important;
+ -webkit-text-fill-color:#B5B8BD!important;
+}
+
+/* Delete stays visually distinct. */
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+button.bg-gray-sub2:has(.text-error-light){
+ background:#FFF4F4!important;
+}
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+button.bg-gray-sub2:has(.text-error-light) :is(span,svg){
+ color:#C35257!important;
+ -webkit-text-fill-color:#C35257!important;
+}
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+button.bg-gray-sub2:has(.text-error-light):active{
+ background:#FDEBEC!important;
+}
+
+/* Keep the sheet's scrollable inner surface light too. */
+body.cc-frame-chat-root
+div.relative.z-0.mt-auto.flex.w-full.max-w-full.flex-col.bg-gray-sub1:has(button .text-error-light)
+> div.flex.min-h-0{
+ background:#FFFFFF!important;
+ color:var(--cc-text)!important;
+}
+
 /* V25 — delete-start selection header/footer in the new iframe. */
 body.cc-frame-chat-root div.shrink-0.bg-gray-main.px-4.pb-6.title20{
  background:#FFFFFF!important;
