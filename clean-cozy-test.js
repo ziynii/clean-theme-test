@@ -114,7 +114,7 @@ function onCozyFrameReady(event){
   const room=outerStableRoomKey();
   sendToCozyScene('room-key',room);
   sendToCozyScene('turn-store',{room,turns:roomTurnRows(room)});
-  sendToCozyScene('settings',settings);
+  sendToCozyScene('settings',ccSettingsSnapshot);
   document.documentElement.classList.add('cc-inner-controls-ready');
   return;
  }
@@ -123,8 +123,20 @@ function onCozyFrameReady(event){
   return;
  }
  if(data?.type==='cc-private-ui-v164'&&data.command==='settings-sync'&&data.payload&&typeof data.payload==='object'){
-  absorbSettings(data.payload);
-  persistSettingsLocal();
+  // Canonical save happens only on zeta-ai.io. The scene never owns the durable copy.
+  const previous={...committedSettings};
+  const next=ccNormalizeSettings(data.payload,committedSettings);
+  settings={...next};
+  committedSettings={...next};
+  if(persistSettingsLocal()){
+   // Ack only after localStorage.setItem actually succeeds.
+   sendToCozyScene('settings-saved',ccSettingsSnapshot);
+  }else{
+   settings={...previous};
+   committedSettings={...previous};
+   ccSettingsSnapshot=ccSnapshotSettings(committedSettings);
+   sendToCozyScene('settings-save-failed',null);
+  }
   return;
  }
 }
@@ -160,10 +172,27 @@ function receiveCozyUIMessage(event){
   }
  }else if(data.command==='turn-store'&&data.payload&&typeof data.payload==='object'){
   receiveOuterTurnStore(data.payload);
- }else if(data.command==='settings'&&data.payload&&typeof data.payload==='object'){
-  absorbSettings(data.payload);
-  // Parent -> scene hydration: persist locally without echoing the same payload back.
-  persistSettingsLocal();
+ }else if(data.command==='settings-save-failed'){
+  ccSettingsSavePending=null;
+  ccSettingsSaveState='error';
+  updateSettingsSaveButton();
+ }else if((data.command==='settings'||data.command==='settings-saved')&&data.payload&&typeof data.payload==='object'){
+  const pending=ccSettingsSavePending;
+  const keepDraft=!!(
+   panel&&!panel.hidden&&(
+    (data.command==='settings'&&ccSettingsDirty())||
+    (data.command==='settings-saved'&&pending&&!ccSettingsAreEqual(settings,pending))
+   )
+  );
+  const draft=keepDraft?{...settings}:null;
+  const next=ccNormalizeSettings(data.payload,committedSettings);
+  committedSettings={...next};
+  ccSettingsSnapshot=ccSnapshotSettings(committedSettings);
+  settings=keepDraft?draft:{...next};
+  if(data.command==='settings-saved'){
+   ccSettingsSavePending=null;
+   ccSettingsSaveState=keepDraft?'idle':'saved';
+  }
   applyOpts();
  }
 }
@@ -487,44 +516,49 @@ function hideThemeLoadingScreen(){
 }
 showThemeLoadingScreen();
 
-const defaults={avatarMode:'both',dialogueHighlight:false,removeNarration:false,lineBreakMode:'short',buttonSafeLane:false};
-let settings={...defaults};
-try{
- const saved=JSON.parse(localStorage.getItem(STORE)||'{}');
- const allowed=['both','none','userHidden','userHiddenHeart'];
- settings.avatarMode=allowed.includes(saved.avatarMode)?saved.avatarMode:(saved.avatar===false?'none':'both');
- settings.removeNarration=saved.removeNarration===true;
- // Restore the user's last explicit choice. First-time default remains OFF.
- settings.dialogueHighlight=saved.dialogueHighlight===true;
- settings.lineBreakMode=['short','long'].includes(saved.lineBreakMode)?saved.lineBreakMode:'short';
- settings.buttonSafeLane=saved.buttonSafeLane===true;
-}catch(e){}
-function absorbSettings(p){
- if(!p||typeof p!=='object')return;
- if(['both','none','userHidden','userHiddenHeart'].includes(p.avatarMode))settings.avatarMode=p.avatarMode;
- if(typeof p.dialogueHighlight==='boolean')settings.dialogueHighlight=p.dialogueHighlight;
- if(typeof p.removeNarration==='boolean')settings.removeNarration=p.removeNarration;
- if(['short','long'].includes(p.lineBreakMode))settings.lineBreakMode=p.lineBreakMode;
- if(typeof p.buttonSafeLane==='boolean')settings.buttonSafeLane=p.buttonSafeLane;
- ccSettingsSnapshot={
-  avatarMode:settings.avatarMode,
-  dialogueHighlight:settings.dialogueHighlight===true,
-  removeNarration:settings.removeNarration===true,
-  lineBreakMode:settings.lineBreakMode,
-  buttonSafeLane:settings.buttonSafeLane===true
+const defaults={avatarMode:'both',dialogueHighlight:true,removeNarration:false,lineBreakMode:'long',buttonSafeLane:false};
+function ccNormalizeSettings(p,base=defaults){
+ const next={...base};
+ if(!p||typeof p!=='object')return next;
+ if(['both','none','userHidden','userHiddenHeart'].includes(p.avatarMode))next.avatarMode=p.avatarMode;
+ if(typeof p.dialogueHighlight==='boolean')next.dialogueHighlight=p.dialogueHighlight;
+ if(typeof p.removeNarration==='boolean')next.removeNarration=p.removeNarration;
+ if(['short','long'].includes(p.lineBreakMode))next.lineBreakMode=p.lineBreakMode;
+ if(typeof p.buttonSafeLane==='boolean')next.buttonSafeLane=p.buttonSafeLane;
+ return next;
+}
+function ccSnapshotSettings(source){
+ const value=ccNormalizeSettings(source,defaults);
+ return {
+  avatarMode:value.avatarMode,
+  dialogueHighlight:value.dialogueHighlight===true,
+  removeNarration:value.removeNarration===true,
+  lineBreakMode:value.lineBreakMode,
+  buttonSafeLane:value.buttonSafeLane===true
  };
+}
+let settings={...defaults};
+// Only zeta-ai.io owns the durable settings record. The iframe starts from the
+// desired defaults and is hydrated by the parent immediately after startup.
+if(!FRAME_CHAT){
+ try{
+  const saved=JSON.parse(localStorage.getItem(STORE)||'{}');
+  settings=ccNormalizeSettings(saved,defaults);
+ }catch(e){}
+}
+let committedSettings={...settings};
+ccSettingsSnapshot=ccSnapshotSettings(committedSettings);
+function absorbSettings(p,{commit=false}={}){
+ const next=ccNormalizeSettings(p,commit?committedSettings:settings);
+ settings={...next};
+ if(commit)committedSettings={...next};
+ ccSettingsSnapshot=ccSnapshotSettings(commit?committedSettings:settings);
 }
 function persistSettingsLocal(){
- ccSettingsSnapshot={
-  avatarMode:settings.avatarMode,
-  dialogueHighlight:settings.dialogueHighlight===true,
-  removeNarration:settings.removeNarration===true,
-  lineBreakMode:settings.lineBreakMode,
-  buttonSafeLane:settings.buttonSafeLane===true
- };
- try{localStorage.setItem(STORE,JSON.stringify(ccSettingsSnapshot));}catch(e){}
+ ccSettingsSnapshot=ccSnapshotSettings(committedSettings);
+ if(FRAME_CHAT)return false;
+ try{localStorage.setItem(STORE,JSON.stringify(ccSettingsSnapshot));return true;}catch(e){return false;}
 }
-absorbSettings(settings);
 const style=document.createElement('style');
 style.id=ID;
 style.textContent=`
@@ -2249,6 +2283,29 @@ body.cc-frame-chat-root .cc-zeta-after-hidden::after{content:none!important;disp
  font-weight:400!important;
  line-height:1.25!important;
 }
+/* V30: explicit settings commit. Choices preview immediately but are durable
+   only after this button receives a save acknowledgement from zeta-ai.io. */
+#cc-panel .cc-settings-save-wrap{
+ margin:13px 0 2px!important;
+ padding-top:11px!important;
+ border-top:1px solid #ECEDEF!important;
+}
+#cc-panel .cc-settings-save{
+ width:100%!important;height:44px!important;
+ display:flex!important;align-items:center!important;justify-content:center!important;
+ border:0!important;border-radius:11px!important;
+ background:var(--cc-accent-strong)!important;color:#FFFFFF!important;
+ -webkit-text-fill-color:#FFFFFF!important;
+ font:700 13px/1 sans-serif!important;letter-spacing:-.01em!important;
+ box-shadow:none!important;cursor:pointer!important;
+}
+#cc-panel .cc-settings-save:disabled{
+ background:#ECEEF0!important;color:#A3A7AD!important;
+ -webkit-text-fill-color:#A3A7AD!important;cursor:default!important;
+}
+#cc-panel .cc-settings-save[data-state="error"]:not(:disabled){
+ background:#C35257!important;color:#FFFFFF!important;-webkit-text-fill-color:#FFFFFF!important;
+}
 
 
 /* V36 — profile-selection light palette, scoped only to this step. */
@@ -2667,7 +2724,7 @@ body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] bu
  color:var(--cc-accent-strong)!important;-webkit-text-fill-color:var(--cc-accent-strong)!important;
 }
 `;
-let panel=null,toggle=null,editShortcut=null,settingsBackdrop=null,observer=null,scheduled=false;
+let panel=null,toggle=null,editShortcut=null,settingsBackdrop=null,settingsSaveButton=null,observer=null,scheduled=false;
 const sendOriginals=new Map();
 function makeSendArrow(){
  const svg=document.querySelector('[data-testid="chat-send-button"] svg');
@@ -2687,10 +2744,91 @@ function makeSendArrow(){
 }
 const actionButtons=new Map();
 const marked=new Set();
+let ccSettingsSavePending=null;
+let ccSettingsSaveState='idle'; // idle | pending | saved | error
+function ccSettingsAreEqual(a,b){
+ const aa=ccSnapshotSettings(a),bb=ccSnapshotSettings(b);
+ return aa.avatarMode===bb.avatarMode&&
+  aa.dialogueHighlight===bb.dialogueHighlight&&
+  aa.removeNarration===bb.removeNarration&&
+  aa.lineBreakMode===bb.lineBreakMode&&
+  aa.buttonSafeLane===bb.buttonSafeLane;
+}
+function ccSettingsDirty(){return !ccSettingsAreEqual(settings,committedSettings);}
+function updateSettingsSaveButton(){
+ if(!settingsSaveButton)return;
+ const dirty=ccSettingsDirty();
+ settingsSaveButton.dataset.state=ccSettingsSaveState;
+ if(ccSettingsSavePending){
+  settingsSaveButton.textContent='저장 중…';
+  settingsSaveButton.disabled=true;
+  return;
+ }
+ if(ccSettingsSaveState==='error'){
+  settingsSaveButton.textContent='저장 실패 · 다시 시도';
+  settingsSaveButton.disabled=false;
+  return;
+ }
+ if(dirty){
+  settingsSaveButton.textContent='저장하기';
+  settingsSaveButton.disabled=false;
+  return;
+ }
+ if(ccSettingsSaveState==='saved'){
+  settingsSaveButton.textContent='저장 완료 ✓';
+  settingsSaveButton.disabled=true;
+  return;
+ }
+ settingsSaveButton.textContent='저장하기';
+ settingsSaveButton.disabled=true;
+}
+function ccMarkSettingsDraftChanged(){
+ if(!ccSettingsSavePending)ccSettingsSaveState='idle';
+ updateSettingsSaveButton();
+}
+function ccBeginSettingsDraft(){
+ if(ccSettingsSavePending)return;
+ settings={...committedSettings};
+ ccSettingsSaveState='idle';
+ applyOpts();
+}
+function ccDiscardSettingsDraft(){
+ // A save already requested by the user is not an unsaved preview anymore.
+ if(ccSettingsSavePending)return;
+ if(!ccSettingsAreEqual(settings,committedSettings)){
+  settings={...committedSettings};
+  applyOpts();
+ }
+ ccSettingsSaveState='idle';
+ updateSettingsSaveButton();
+}
 function save(){
- persistSettingsLocal();
- if(OUTER_ROOM)sendToCozyScene('settings',ccSettingsSnapshot);
- else if(FRAME_CHAT)sendToCozyOuter('settings-sync',ccSettingsSnapshot);
+ if(ccSettingsSavePending||!ccSettingsDirty())return;
+ const payload=ccSnapshotSettings(settings);
+ ccSettingsSaveState='pending';
+ if(FRAME_CHAT){
+  ccSettingsSavePending={...payload};
+  updateSettingsSaveButton();
+  if(!sendToCozyOuter('settings-sync',payload)){
+   ccSettingsSavePending=null;
+   ccSettingsSaveState='error';
+   updateSettingsSaveButton();
+  }
+  return;
+ }
+ // Parent / non-frame fallback: this origin owns the durable record.
+ const previous={...committedSettings};
+ committedSettings={...payload};
+ settings={...payload};
+ if(persistSettingsLocal()){
+  if(OUTER_ROOM)sendToCozyScene('settings-saved',ccSettingsSnapshot);
+  ccSettingsSaveState='saved';
+ }else{
+  committedSettings={...previous};
+  ccSettingsSnapshot=ccSnapshotSettings(committedSettings);
+  ccSettingsSaveState='error';
+ }
+ updateSettingsSaveButton();
 }
 /* Reliable inline dialogue highlighting for desktop and mobile.
    Keep the inline spans mounted when toggled off. CSS alone controls visibility.
@@ -2760,6 +2898,7 @@ function applyOpts(){
  if(narrationInput)narrationInput.checked=settings.removeNarration===true;
  if(panel)for(const input of panel.querySelectorAll('input[name="cc-line-break-mode"]'))input.checked=input.value===settings.lineBreakMode;
  if(panel)for(const input of panel.querySelectorAll('input[name="cc-button-safe-lane"]'))input.checked=(input.value==='on')===settings.buttonSafeLane;
+ updateSettingsSaveButton();
 }
 const frameCapturedTimes=new WeakMap();
 function getTime(body){
@@ -4043,11 +4182,12 @@ function updateActionAvailability(){
  }
 }
 function runOriginalAction(key){
- if(OUTER_ROOM){const sent=sendToCozyScene(key==='edit'?'edit':'action',key==='edit'?null:key);if(sent){panel.hidden=true;panel.style.removeProperty('display');if(settingsBackdrop)settingsBackdrop.hidden=true;}else console.warn('[Clean Cozy] 채팅 iframe을 찾지 못해 작업을 실행하지 않았어요.');return;}
+ if(OUTER_ROOM){const sent=sendToCozyScene(key==='edit'?'edit':'action',key==='edit'?null:key);if(sent){ccDiscardSettingsDraft();panel.hidden=true;panel.style.removeProperty('display');if(settingsBackdrop)settingsBackdrop.hidden=true;}else console.warn('[Clean Cozy] 채팅 iframe을 찾지 못해 작업을 실행하지 않았어요.');return;}
  const def=actions.find(a=>a[0]===key);
  if(!def)return;
  const original=key==='edit'?nativeEditButton():availableNativeAction(key);
  if(!original||original.disabled)return;
+ ccDiscardSettingsDraft();
  panel.hidden=true;panel.style.removeProperty('display');if(settingsBackdrop)settingsBackdrop.hidden=true;toggle?.setAttribute('aria-expanded','false');
  original.click();
 }
@@ -4058,6 +4198,7 @@ function onSettingsOutsidePointer(event){
  // 팝업/X/팝업 배경을 누른 것은 '설정창 바깥 클릭'으로 취급하지 않는다.
  if(target instanceof Element&&target.closest('#cc-help-dialog,#cc-help-backdrop'))return;
  if(target instanceof Node&&(panel.contains(target)||toggle?.contains(target)))return;
+ ccDiscardSettingsDraft();
  panel.hidden=true;panel.style.removeProperty('display');if(settingsBackdrop)settingsBackdrop.hidden=true;toggle?.setAttribute('aria-expanded','false');
 }
 function removeDuplicateCozyControls(){
@@ -4097,7 +4238,7 @@ function makeControls(){
  ]){
   const label=document.createElement('label');label.className='cc-avatar-option';
   const input=document.createElement('input');input.type='radio';input.name='cc-avatar-mode';input.value=value;input.checked=settings.avatarMode===value;
-  input.addEventListener('change',()=>{if(!input.checked)return;settings.avatarMode=value;save();applyOpts();});
+  input.addEventListener('change',()=>{if(!input.checked)return;settings.avatarMode=value;ccMarkSettingsDraftChanged();applyOpts();});
   const text=document.createElement('span');text.textContent=title;
   label.append(input,text);avatarGroup.appendChild(label);
  }
@@ -4105,7 +4246,7 @@ function makeControls(){
  const highlightTitle=document.createElement('div');highlightTitle.className='cc-section-title';highlightTitle.textContent='대사 꾸미기';panel.appendChild(highlightTitle);
  const highlightLabel=document.createElement('label');highlightLabel.className='cc-avatar-option';highlightLabel.setAttribute('for','cc-dialogue-highlight-toggle');
  const highlightCheckbox=document.createElement('input');highlightCheckbox.id='cc-dialogue-highlight-toggle';highlightCheckbox.type='checkbox';highlightCheckbox.checked=settings.dialogueHighlight===true;
- highlightCheckbox.addEventListener('change',()=>{settings.dialogueHighlight=highlightCheckbox.checked;save();applyOpts();});
+ highlightCheckbox.addEventListener('change',()=>{settings.dialogueHighlight=highlightCheckbox.checked;ccMarkSettingsDraftChanged();applyOpts();});
  const highlightText=document.createElement('span');highlightText.textContent='대사 형광펜';
  highlightLabel.append(highlightCheckbox,highlightText);panel.appendChild(highlightLabel);
 
@@ -4117,7 +4258,7 @@ function makeControls(){
  ]){
   const label=document.createElement('label');label.className='cc-avatar-option cc-safe-lane-option';
   const input=document.createElement('input');input.type='radio';input.name='cc-button-safe-lane';input.value=value;input.checked=(value==='on')===settings.buttonSafeLane;
-  input.addEventListener('change',()=>{if(!input.checked)return;settings.buttonSafeLane=value==='on';save();applyOpts();});
+  input.addEventListener('change',()=>{if(!input.checked)return;settings.buttonSafeLane=value==='on';ccMarkSettingsDraftChanged();applyOpts();});
   const copy=document.createElement('span');copy.className='cc-safe-lane-copy';
   const titleText=document.createElement('span');titleText.className='cc-safe-lane-label';titleText.textContent=title;
   const hintText=document.createElement('span');hintText.className='cc-safe-lane-hint';hintText.textContent=hint;
@@ -4130,14 +4271,14 @@ function makeControls(){
  for(const [value,title] of [['short','짧은 출력'],['long','긴 출력']]){
   const label=document.createElement('label');label.className='cc-avatar-option cc-output-option';
   const input=document.createElement('input');input.type='radio';input.name='cc-line-break-mode';input.value=value;input.checked=settings.lineBreakMode===value;
-  input.addEventListener('change',()=>{if(!input.checked)return;settings.lineBreakMode=value;save();applyOpts();});
+  input.addEventListener('change',()=>{if(!input.checked)return;settings.lineBreakMode=value;ccMarkSettingsDraftChanged();applyOpts();});
   const text=document.createElement('span');text.textContent=title;
   label.append(input,text);outputGroup.appendChild(label);
  }
  panel.appendChild(outputGroup);
  const narrationLabel=document.createElement('label');narrationLabel.className='cc-avatar-option';narrationLabel.setAttribute('for','cc-remove-narration-toggle');
  const narrationCheckbox=document.createElement('input');narrationCheckbox.id='cc-remove-narration-toggle';narrationCheckbox.type='checkbox';narrationCheckbox.checked=settings.removeNarration===true;
- narrationCheckbox.addEventListener('change',()=>{settings.removeNarration=narrationCheckbox.checked;save();});
+ narrationCheckbox.addEventListener('change',()=>{settings.removeNarration=narrationCheckbox.checked;ccMarkSettingsDraftChanged();applyOpts();});
  const narrationText=document.createElement('span');narrationText.textContent='나레이션 삭제 (@:)';
  narrationLabel.append(narrationCheckbox,narrationText);panel.appendChild(narrationLabel);
  const section=document.createElement('div');section.className='cc-section-title';section.textContent='채팅 도구 · 제타 버튼 연동';panel.appendChild(section);
@@ -4162,6 +4303,17 @@ function makeControls(){
  helpButton.innerHTML='<span class="cc-help-open-icon" aria-hidden="true">ⓘ</span><span>사용방법</span>';
  list.appendChild(helpButton);
  panel.appendChild(list);
+
+ const saveWrap=document.createElement('div');
+ saveWrap.className='cc-settings-save-wrap';
+ settingsSaveButton=document.createElement('button');
+ settingsSaveButton.className='cc-settings-save';
+ settingsSaveButton.type='button';
+ settingsSaveButton.textContent='저장하기';
+ settingsSaveButton.addEventListener('click',save);
+ saveWrap.appendChild(settingsSaveButton);
+ panel.appendChild(saveWrap);
+ updateSettingsSaveButton();
 
  const helpBackdrop=document.createElement('div');
  helpBackdrop.id='cc-help-backdrop';
@@ -4228,6 +4380,7 @@ function makeControls(){
   settingsBackdrop.setAttribute('aria-hidden',String(!open));
   toggle.setAttribute('aria-expanded',String(open));
   if(open){
+   ccBeginSettingsDraft();
     // Bottom sheet is viewport-fixed and independent of the floating buttons.
    for(const prop of ['left','right','top','bottom','transform'])panel.style.removeProperty(prop);
    panel.style.setProperty('display','block','important');
@@ -4236,6 +4389,7 @@ function makeControls(){
    panel.style.setProperty('pointer-events','auto','important');
    panel.style.setProperty('z-index','2147483646','important');
   }else{
+   ccDiscardSettingsDraft();
    panel.style.removeProperty('display');
    panel.style.removeProperty('visibility');
    panel.style.removeProperty('opacity');
@@ -4255,7 +4409,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
