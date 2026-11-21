@@ -2784,7 +2784,12 @@ const sendOriginals=new Map();
 function makeSendArrow(){
  const svg=document.querySelector('[data-testid="chat-send-button"] svg');
  if(!svg)return;
- if(!sendOriginals.has(svg))sendOriginals.set(svg,{html:svg.innerHTML,viewBox:svg.getAttribute('viewBox'),fill:svg.getAttribute('fill')});
+ if(!sendOriginals.has(svg)){
+  for(const oldSvg of sendOriginals.keys()){
+   if(!oldSvg.isConnected)sendOriginals.delete(oldSvg);
+  }
+  sendOriginals.set(svg,{html:svg.innerHTML,viewBox:svg.getAttribute('viewBox'),fill:svg.getAttribute('fill')});
+ }
  if(svg.dataset.ccArrow==='1')return;
  svg.setAttribute('viewBox','0 0 24 24');
  svg.setAttribute('fill','none');
@@ -2799,6 +2804,13 @@ function makeSendArrow(){
 }
 const actionButtons=new Map();
 const marked=new Set();
+function ccRememberMarked(el){
+ if(!(el instanceof Element))return;
+ for(const old of marked){
+  if(!old.isConnected)marked.delete(old);
+ }
+ marked.add(el);
+}
 let ccSettingsSavePending=null;
 let ccSettingsSaveState='idle'; // idle | pending | saved | error
 let ccSettingsSaveTimer=0;
@@ -3530,7 +3542,7 @@ function enhanceDates(){
     const nameNode=document.createElement('span');nameNode.className='cc-meta-name';nameNode.textContent=name;
     meta.appendChild(nameNode);bubble.prepend(meta);
     const nativeName=frameNameLabel(body);
-    if(nativeName){nativeName.classList.add('cc-name-hidden');marked.add(nativeName);}
+    if(nativeName){nativeName.classList.add('cc-name-hidden');ccRememberMarked(nativeName);}
    }
   }
   if(!meta)continue;
@@ -3593,7 +3605,7 @@ function enhance(){
   const time=getTime(body);
   if(time){const timeSpan=document.createElement('span');timeSpan.className='cc-meta-time';timeSpan.textContent='· '+time;meta.appendChild(timeSpan);}
   bubble.insertBefore(meta,bubble.firstChild);
-  if(label){label.classList.add('cc-name-hidden');marked.add(label);}
+  if(label){label.classList.add('cc-name-hidden');ccRememberMarked(label);}
   updateMobPersonAvatar(body);
  }
 }
@@ -5561,7 +5573,6 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     actions.set(id, buildSingleAction(entry, element, shell));
     render();
     toast(`${entry.label}를 폴더에 넣었어요`);
-    notifyOuter();
   }
 
   function registerGroup(container, buttons) {
@@ -5595,7 +5606,6 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     actions.set(id, buildGroupAction(entry, buttons, container));
     render();
     toast(`${entry.label}를 폴더에 넣었어요`);
-    notifyOuter();
   }
 
   function removeAction(id) {
@@ -5606,7 +5616,6 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     persist();
     render();
     toast(`${action?.label || '도구'}를 밖으로 꺼냈어요`);
-    notifyOuter();
   }
 
   function visualShellFor(trigger, pathElements, movedRecords = []) {
@@ -6912,6 +6921,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     installStoreBridge();
     installAccentBridge();
     await loadPos();
+    if (stopped) return;
 
     discover();
 
