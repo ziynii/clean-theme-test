@@ -687,20 +687,8 @@ a[testid^="room-list-item-"] span.body1{color:#25272A!important;-webkit-text-fil
 }
 /* Don't give the content column desktop-sized margins on mobile. */
 @media(max-width:640px){
-  /* Reserve a real right-side safe lane for the floating button stack. */
   [role="log"][aria-label="Chat messages"] [data-sentry-component="BodyView"],
-  [role="log"][aria-label="Chat messages"] [data-sentry-component="NarratorBubble"],
-  [role="log"][aria-label="Chat messages"] [data-sentry-component="LeftTextContent"],
-  [role="log"][aria-label="Chat messages"] [data-sentry-component="RightTextContent"]{
-    width:calc(100% - 54px)!important;
-    max-width:calc(100% - 54px)!important;
-    margin-left:0!important;
-    margin-right:54px!important;
-    box-sizing:border-box!important;
-  }
-
-  [role="log"][aria-label="Chat messages"] [data-sentry-component="LeftTextContent"] > div,
-  [role="log"][aria-label="Chat messages"] [data-sentry-component="RightTextContent"] > div{
+  [role="log"][aria-label="Chat messages"] [data-sentry-component="NarratorBubble"]{
     max-width:100%!important;
   }
   [data-sentry-component="ChatBubbleContainer"] .chat,
@@ -770,7 +758,7 @@ html.cc-tools-ready [data-sentry-component="QuickReplyButton"]{display:none!impo
   justify-content:flex-start!important;
 }
 [role="log"][aria-label="Chat messages"] [data-sentry-component="RightTextContent"]{
-  padding-right:8px!important;padding-left:14px!important;
+  padding-right:14px!important;padding-left:14px!important;
   justify-content:flex-end!important;
 }
 [role="log"][aria-label="Chat messages"] [data-sentry-component="LeftTextContent"] > div,
@@ -2474,8 +2462,8 @@ body.cc-frame-chat-root #cc-line-shortcut{right:8px!important;bottom:258px!impor
 
 if(FRAME_CHAT)style.textContent+=`
 /* FINAL mobile right safe lane.
-   Kept at the end of the theme CSS so older width/margin !important rules
-   cannot overwrite it. This reserves space only inside the chat log. */
+   Preserve the deployed message-row geometry. The option only reserves
+   viewport space at the chat-log level; it never rewrites row/bubble widths. */
 @media (max-width:700px){
   body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]{
     padding-right:0!important;
@@ -2483,34 +2471,6 @@ if(FRAME_CHAT)style.textContent+=`
   }
   html.cc-button-safe-lane body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]{
     padding-right:36px!important;
-  }
-
-  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
-  [data-sentry-component="LeftTextContent"],
-  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
-  [data-sentry-component="RightTextContent"],
-  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
-  [data-sentry-component="BodyView"],
-  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
-  [data-sentry-component="NarratorBubble"]{
-    width:100%!important;
-    max-width:100%!important;
-    box-sizing:border-box!important;
-  }
-
-  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
-  [data-sentry-component="LeftTextContent"],
-  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
-  [data-sentry-component="RightTextContent"]{
-    margin-left:0!important;
-    margin-right:0!important;
-  }
-
-  /* Give only the user's bubble a tiny bit more room toward the left. */
-  body.cc-frame-chat-root [role="log"][aria-label="Chat messages"]
-  [data-sentry-component="RightTextContent"]
-  [data-sentry-component="ChatBubbleContainer"]{
-    max-width:calc(100% + 12px)!important;
   }
 }
 `;
@@ -4349,12 +4309,7 @@ function ccStartRuntimeOnce(){
  announceFrameCoreReady();
  announceFrameControls(true);
 
- observer=new MutationObserver(()=>{
-  // Match the lightweight stable theme: re-tag recycled message DOM immediately.
-  // Heavy decoration/date/capture work stays batched in schedule().
-  markFrameChatRoot();
-  schedule();
- });
+ observer=new MutationObserver(schedule);
  observer.observe(document.documentElement,{childList:true,subtree:true});
 
  // Zeta can finish hydrating message rows after the chat log/composer already exist.
