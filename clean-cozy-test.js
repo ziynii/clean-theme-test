@@ -40,6 +40,26 @@ function outerStableRoomKey(){
 
 // Cross-origin coordination between our own two userscript instances only.
 // No access to the other frame's DOM, Zeta data, or internal APIs.
+function ccIsAllowedOuterOrigin(origin){
+ return /^https:\/\/(?:[a-z0-9-]+\.)*zeta-ai\.io$/i.test(String(origin||''));
+}
+let ccOuterOrigin='';
+if(FRAME_CHAT){
+ try{
+  const refOrigin=new URL(document.referrer).origin;
+  if(ccIsAllowedOuterOrigin(refOrigin))ccOuterOrigin=refOrigin;
+ }catch(e){}
+}
+function ccPostToOuter(message){
+ if(!FRAME_CHAT)return false;
+ try{
+  // Before the first parent message, referrer can be unavailable on some browsers.
+  // In that short window use "*" only for this private UI message; the parent
+  // validates pingpong origin + exact scene contentWindow before accepting it.
+  window.parent.postMessage(message,ccOuterOrigin||'*');
+  return true;
+ }catch(e){return false;}
+}
 let ccLastFrameReadyAt=0;
 let ccFrameCoreReadySent=false;
 let ccFrameCoreReadyTimer=0;
@@ -84,7 +104,7 @@ function announceFrameCoreReady(){
   ccFrameCoreReadyTimer=0;
   if(ccFrameCoreReadySent||!ccFrameThemeLooksReady())return;
   ccFrameCoreReadySent=true;
-  try{window.parent.postMessage({type:'clean-cozy-frame-core-ready-v1'},'https://zeta-ai.io');}catch(e){}
+  ccPostToOuter({type:'clean-cozy-frame-core-ready-v1'});
  },350);
 }
 function announceFrameControls(force=false){
@@ -97,7 +117,7 @@ function announceFrameControls(force=false){
  const now=Date.now();
  if(!force&&now-ccLastFrameReadyAt<700)return;
  ccLastFrameReadyAt=now;
- try{window.parent.postMessage({type:'clean-cozy-frame-controls-ready-v163',settings:ccSettingsSnapshot},'https://zeta-ai.io');}catch(e){}
+ ccPostToOuter({type:'clean-cozy-frame-controls-ready-v163',settings:ccSettingsSnapshot});
 }
 function onCozyFrameReady(event){
  if(!OUTER_ROOM||event.origin!=='https://frame.pingpong.ai')return;
@@ -148,11 +168,11 @@ function sendToCozyScene(type, payload){
  try{frame.contentWindow.postMessage({type:'cc-private-ui-v164',command:type,payload},'https://frame.pingpong.ai');return true;}catch(e){return false;}
 }
 function sendToCozyOuter(type,payload){
- if(!FRAME_CHAT)return false;
- try{window.parent.postMessage({type:'cc-private-ui-v164',command:type,payload},'https://zeta-ai.io');return true;}catch(e){return false;}
+ return ccPostToOuter({type:'cc-private-ui-v164',command:type,payload});
 }
 function receiveCozyUIMessage(event){
- if(!FRAME_CHAT||event.origin!=='https://zeta-ai.io'||event.source!==window.parent)return;
+ if(!FRAME_CHAT||!ccIsAllowedOuterOrigin(event.origin)||event.source!==window.parent)return;
+ ccOuterOrigin=event.origin;
  const data=event.data;
  if(!data||data.type!=='cc-private-ui-v164')return;
  if(data.command==='edit'){nativeEditButton()?.click();}
@@ -173,6 +193,7 @@ function receiveCozyUIMessage(event){
  }else if(data.command==='turn-store'&&data.payload&&typeof data.payload==='object'){
   receiveOuterTurnStore(data.payload);
  }else if(data.command==='settings-save-failed'){
+  ccClearSettingsSaveTimer();
   ccSettingsSavePending=null;
   ccSettingsSaveState='error';
   updateSettingsSaveButton();
@@ -190,6 +211,7 @@ function receiveCozyUIMessage(event){
   ccSettingsSnapshot=ccSnapshotSettings(committedSettings);
   settings=keepDraft?draft:{...next};
   if(data.command==='settings-saved'){
+   ccClearSettingsSaveTimer();
    ccSettingsSavePending=null;
    ccSettingsSaveState=keepDraft?'idle':'saved';
   }
@@ -2746,6 +2768,23 @@ const actionButtons=new Map();
 const marked=new Set();
 let ccSettingsSavePending=null;
 let ccSettingsSaveState='idle'; // idle | pending | saved | error
+let ccSettingsSaveTimer=0;
+function ccClearSettingsSaveTimer(){
+ if(ccSettingsSaveTimer){
+  clearTimeout(ccSettingsSaveTimer);
+  ccSettingsSaveTimer=0;
+ }
+}
+function ccStartSettingsSaveTimer(){
+ ccClearSettingsSaveTimer();
+ ccSettingsSaveTimer=setTimeout(()=>{
+  ccSettingsSaveTimer=0;
+  if(!ccSettingsSavePending)return;
+  ccSettingsSavePending=null;
+  ccSettingsSaveState='error';
+  updateSettingsSaveButton();
+ },3000);
+}
 function ccSettingsAreEqual(a,b){
  const aa=ccSnapshotSettings(a),bb=ccSnapshotSettings(b);
  return aa.avatarMode===bb.avatarMode&&
@@ -2810,9 +2849,12 @@ function save(){
   ccSettingsSavePending={...payload};
   updateSettingsSaveButton();
   if(!sendToCozyOuter('settings-sync',payload)){
+   ccClearSettingsSaveTimer();
    ccSettingsSavePending=null;
    ccSettingsSaveState='error';
    updateSettingsSaveButton();
+  }else{
+   ccStartSettingsSaveTimer();
   }
   return;
  }
@@ -4409,7 +4451,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
