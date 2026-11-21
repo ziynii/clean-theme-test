@@ -279,15 +279,37 @@ function markFrameChatRoot(){
  const composerDock=composer?.closest('[class*="bg-linear-to-b"]');
  if(composerDock&&!composerDock.hasAttribute('data-sentry-component'))composerDock.setAttribute('data-sentry-component','ChatComposer');
  // Old Zeta exposed named sentry wrappers. New Zeta renders left/right rows directly.
- for(const row of log.querySelectorAll('div.flex.flex-row.items-start')){
+ // Virtualized rows can be recycled with slightly different Tailwind classes,
+ // so identify them from stable rendered structure instead of exact class bundles.
+ const rows=[...log.querySelectorAll('div')].filter(row=>{
+  if(!(row instanceof HTMLElement))return false;
+  if(row.getAttribute('data-sentry-component')==='LeftTextContent'||row.getAttribute('data-sentry-component')==='RightTextContent')return true;
   const cls=row.classList;
-  const isUser=cls.contains('ml-auto')&&cls.contains('pr-2');
-  const isCharacter=cls.contains('pl-2')&&cls.contains('pr-[72px]');
+  if(!cls.contains('flex')||!cls.contains('flex-row'))return false;
+  if(cls.contains('ml-auto'))return true;
+  if(cls.contains('pl-2')&&cls.contains('pr-[72px]'))return true;
+  return [...row.children].some(el=>el instanceof HTMLElement&&el.tagName==='BUTTON'&&el.classList.contains('shrink-0'));
+ });
+
+ for(const row of rows){
+  const cls=row.classList;
+  const existingRole=row.getAttribute('data-sentry-component');
+  const directButton=[...row.children].find(el=>el instanceof HTMLElement&&el.tagName==='BUTTON'&&el.classList.contains('shrink-0'))||null;
+  const isUser=existingRole==='RightTextContent'||cls.contains('ml-auto');
+  const isCharacter=!isUser&&(
+   existingRole==='LeftTextContent'||
+   (cls.contains('pl-2')&&cls.contains('pr-[72px]'))||
+   !!directButton
+  );
   if(!isUser&&!isCharacter)continue;
-  const bubble=[...row.querySelectorAll('div')].find(el=>
-   el.classList.contains('w-fit')&&el.classList.contains('flex-col')&&
-   (el.classList.contains('rounded-r-xl')||el.classList.contains('rounded-l-xl')));
-  if(!bubble)continue;
+
+  const bubble=
+   row.querySelector(':scope [data-sentry-component="ChatBubbleContainer"]')||
+   [...row.querySelectorAll('div')].find(el=>
+    el.classList.contains('w-fit')&&el.classList.contains('flex-col')
+   );
+  if(!bubble||bubble===row)continue;
+
   const role=isUser?'RightTextContent':'LeftTextContent';
   if(row.getAttribute('data-sentry-component')!==role)row.setAttribute('data-sentry-component',role);
   if(!bubble.hasAttribute('data-sentry-component'))bubble.setAttribute('data-sentry-component','ChatBubbleContainer');
