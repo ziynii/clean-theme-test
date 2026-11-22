@@ -78,28 +78,11 @@ function ccFrameThemeLooksReady(){
  const modelButton=document.querySelector('header [data-testid="chat-header-model"]');
  if(modelButton && getComputedStyle(modelButton).display!=='none')return false;
 
- // Do not dismiss the loading mask when only one recycled row has been mapped.
- // Every currently rendered real user/character row must have completed the
- // structural mapping used by Clean Cozy.
+ // If rendered chat rows are already present, at least one real bubble must
+ // have completed Clean Cozy's DOM marking before the loading mask disappears.
  const renderedRows=log.querySelectorAll('div.flex.flex-row.items-start');
- let realRows=0;
- for(const row of renderedRows){
-  const cls=row.classList;
-  const isUser=cls.contains('ml-auto')&&cls.contains('pr-2');
-  const isCharacter=cls.contains('pl-2')&&cls.contains('pr-[72px]');
-  if(!isUser&&!isCharacter)continue;
-  realRows++;
+ if(renderedRows.length && !log.querySelector('[data-sentry-component="ChatBubbleContainer"]'))return false;
 
-  const expectedRole=isUser?'RightTextContent':'LeftTextContent';
-  if(row.getAttribute('data-sentry-component')!==expectedRole)return false;
-
-  const bubble=[...row.querySelectorAll('div')].find(el=>
-   el.classList.contains('w-fit')&&el.classList.contains('flex-col')&&
-   (el.classList.contains('rounded-r-xl')||el.classList.contains('rounded-l-xl')));
-  if(!bubble||bubble.getAttribute('data-sentry-component')!=='ChatBubbleContainer')return false;
- }
-
- if(realRows && !log.querySelector('[data-sentry-component="ChatBubbleContainer"]'))return false;
  return true;
 }
 
@@ -188,8 +171,6 @@ function sendToCozyScene(type, payload){
 let ccWatchedScene=null;
 function ccOnSceneLoad(){
  if(!OUTER_ROOM)return;
- // A scene navigation/reload can happen after an earlier core-ready signal.
- // Hide native/intermediate UI again and wait for the NEW iframe document.
  document.documentElement.classList.remove('cc-inner-controls-ready');
  showThemeLoadingScreen();
 }
@@ -209,7 +190,22 @@ function receiveCozyUIMessage(event){
  ccOuterOrigin=event.origin;
  const data=event.data;
  if(!data||data.type!=='cc-private-ui-v164')return;
- if(data.command==='edit'){nativeEditButton()?.click();}
+ if(data.command==='theme-repair'){
+  // Recover from a slow/partial Zeta hydration without reloading the page.
+  ccFrameCoreReadySent=false;
+  if(ccFrameCoreReadyTimer){
+   clearTimeout(ccFrameCoreReadyTimer);
+   ccFrameCoreReadyTimer=0;
+  }
+  if(!style?.isConnected)(document.head||document.documentElement).appendChild(style);
+  markFrameChatRoot();
+  applyOpts();
+  if(FRAME_CHAT){
+   ccEnsureFloatingControls();
+   schedule();
+  }
+ }
+ else if(data.command==='edit'){nativeEditButton()?.click();}
  else if(data.command==='line'){pressLineTool();}
  else if(data.command==='action'&&['snapshot','report','request','regen','suggest'].includes(data.payload)){
   availableNativeAction(data.payload)?.click();
@@ -544,8 +540,27 @@ document.getElementById(ID)?.remove();
 let ccThemeLoadingScreen=null;
 let ccThemeLoadingStyle=null;
 let ccThemeLoadingFailsafe=0;
+let ccThemeRepairTimers=[];
+function ccClearThemeRepairTimers(){
+ for(const timer of ccThemeRepairTimers)clearTimeout(timer);
+ ccThemeRepairTimers=[];
+}
+function ccRequestThemeRepair(){
+ if(!OUTER_ROOM)return;
+ sendToCozyScene('theme-repair',null);
+}
 function showThemeLoadingScreen(){
- if(!OUTER_ROOM||ccThemeLoadingScreen?.isConnected)return;
+ if(!OUTER_ROOM)return;
+ if(ccThemeLoadingScreen?.isConnected){
+  // The same outer document can survive while Zeta rebuilds/reloads its scene.
+  // Restart only the recovery timers; never force a page reload.
+  ccClearThemeRepairTimers();
+  ccThemeRepairTimers=[
+   setTimeout(ccRequestThemeRepair,2500),
+   setTimeout(ccRequestThemeRepair,5000)
+  ];
+  return;
+ }
  ccThemeLoadingStyle=document.createElement('style');
  ccThemeLoadingStyle.id='cc-theme-loading-style';
  ccThemeLoadingStyle.textContent=`
@@ -587,8 +602,16 @@ function showThemeLoadingScreen(){
  ccThemeLoadingScreen.setAttribute('aria-live','polite');
  ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">이 화면이 5초 이상 지속되면 새로고침 해주세요</div></div>';
  document.body.appendChild(ccThemeLoadingScreen);
+ // Never reveal a half-themed scene just because a timeout elapsed.
+ // If startup is slow, ask the already-running iframe userscript to reapply
+ // its DOM-only theme pass. No browser/page reload is performed.
  if(ccThemeLoadingFailsafe)clearTimeout(ccThemeLoadingFailsafe);
- ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),7000);
+ ccThemeLoadingFailsafe=0;
+ ccClearThemeRepairTimers();
+ ccThemeRepairTimers=[
+  setTimeout(ccRequestThemeRepair,2500),
+  setTimeout(ccRequestThemeRepair,5000)
+ ];
 }
 function hideThemeLoadingScreen(){
  const screen=ccThemeLoadingScreen;
@@ -602,6 +625,7 @@ function hideThemeLoadingScreen(){
   clearTimeout(ccThemeLoadingFailsafe);
   ccThemeLoadingFailsafe=0;
  }
+ ccClearThemeRepairTimers();
 }
 showThemeLoadingScreen();
 ccEnsureSceneLoadWatcher();
@@ -4589,7 +4613,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){ccStopped=true;ccRuntimeStarted=false;if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(ccWatchedScene){ccWatchedScene.removeEventListener('load',ccOnSceneLoad);ccWatchedScene=null;}if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){ccStopped=true;ccRuntimeStarted=false;if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(ccWatchedScene){ccWatchedScene.removeEventListener('load',ccOnSceneLoad);ccWatchedScene=null;}ccClearThemeRepairTimers();if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
