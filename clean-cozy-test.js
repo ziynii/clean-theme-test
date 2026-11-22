@@ -97,9 +97,13 @@ function announceFrameCoreReady(){
   return;
  }
 
- // Do not accept a transient pre-hydration frame. Require the themed state
- // to still be valid after a short stability window.
- if(ccFrameCoreReadyTimer)return;
+ // Require a real quiet/stability window. If Zeta mutates/hydrates the scene
+ // again before 350ms passes, restart the clock instead of accepting the
+ // first transient themed frame.
+ if(ccFrameCoreReadyTimer){
+  clearTimeout(ccFrameCoreReadyTimer);
+  ccFrameCoreReadyTimer=0;
+ }
  ccFrameCoreReadyTimer=setTimeout(()=>{
   ccFrameCoreReadyTimer=0;
   if(ccFrameCoreReadySent||!ccFrameThemeLooksReady())return;
@@ -167,21 +171,6 @@ function sendToCozyScene(type, payload){
  if(!frame?.contentWindow)return false;
  try{frame.contentWindow.postMessage({type:'cc-private-ui-v164',command:type,payload},'https://frame.pingpong.ai');return true;}catch(e){return false;}
 }
-
-let ccWatchedScene=null;
-function ccOnSceneLoad(){
- if(!OUTER_ROOM)return;
- document.documentElement.classList.remove('cc-inner-controls-ready');
- showThemeLoadingScreen();
-}
-function ccEnsureSceneLoadWatcher(){
- if(!OUTER_ROOM)return;
- const scene=document.querySelector('iframe[title="scene"][src^="https://frame.pingpong.ai/"]');
- if(scene===ccWatchedScene)return;
- if(ccWatchedScene)ccWatchedScene.removeEventListener('load',ccOnSceneLoad);
- ccWatchedScene=scene||null;
- if(ccWatchedScene)ccWatchedScene.addEventListener('load',ccOnSceneLoad);
-}
 function sendToCozyOuter(type,payload){
  return ccPostToOuter({type:'cc-private-ui-v164',command:type,payload});
 }
@@ -190,54 +179,7 @@ function receiveCozyUIMessage(event){
  ccOuterOrigin=event.origin;
  const data=event.data;
  if(!data||data.type!=='cc-private-ui-v164')return;
- if(data.command==='theme-repair'||data.command==='theme-repair-final'){
-  // Recover from a slow/partial Zeta hydration without reloading the page.
-  const finalRepair=data.command==='theme-repair-final';
-  ccFrameCoreReadySent=false;
-  if(ccFrameCoreReadyTimer){
-   clearTimeout(ccFrameCoreReadyTimer);
-   ccFrameCoreReadyTimer=0;
-  }
-
-  if(!style?.isConnected)(document.head||document.documentElement).appendChild(style);
-  markFrameChatRoot();
-  applyOpts();
-
-  if(FRAME_CHAT){
-   ccEnsureFloatingControls();
-
-   if(finalRepair){
-    // Final bounded recovery: run the visible theme pass directly, then wait
-    // two paints before acknowledging the outer mask. This prevents infinite
-    // loading if the normal computed-style canary never settles on Safari.
-    enhance();
-    enhanceHeader();
-    updateDialogueHighlight();
-    makeSendArrow();
-    ccApplyCaptureMode();
-
-    requestAnimationFrame(()=>requestAnimationFrame(()=>{
-     if(ccStopped)return;
-     if(!style?.isConnected)(document.head||document.documentElement).appendChild(style);
-     markFrameChatRoot();
-
-     const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
-     const composer=document.querySelector('[data-testid="composer-input-box"]');
-     if(!log||!composer||!document.body?.classList.contains('cc-frame-chat-root')){
-      schedule();
-      return;
-     }
-
-     ccFrameCoreReadySent=true;
-     ccPostToOuter({type:'clean-cozy-frame-core-ready-v1',recovered:true});
-     schedule();
-    }));
-   }else{
-    schedule();
-   }
-  }
- }
- else if(data.command==='edit'){nativeEditButton()?.click();}
+ if(data.command==='edit'){nativeEditButton()?.click();}
  else if(data.command==='line'){pressLineTool();}
  else if(data.command==='action'&&['snapshot','report','request','regen','suggest'].includes(data.payload)){
   availableNativeAction(data.payload)?.click();
@@ -572,21 +514,8 @@ document.getElementById(ID)?.remove();
 let ccThemeLoadingScreen=null;
 let ccThemeLoadingStyle=null;
 let ccThemeLoadingFailsafe=0;
-let ccThemeRepairTimers=[];
-function ccClearThemeRepairTimers(){
- for(const timer of ccThemeRepairTimers)clearTimeout(timer);
- ccThemeRepairTimers=[];
-}
-function ccRequestThemeRepair(){
- if(!OUTER_ROOM)return;
- sendToCozyScene('theme-repair',null);
-}
 function showThemeLoadingScreen(){
- if(!OUTER_ROOM)return;
- // Important: Zeta may reload/rebuild the scene several times during startup.
- // If the mask is already visible, NEVER restart the recovery clock; otherwise
- // repeated iframe load events can postpone repair forever.
- if(ccThemeLoadingScreen?.isConnected)return;
+ if(!OUTER_ROOM||ccThemeLoadingScreen?.isConnected)return;
  ccThemeLoadingStyle=document.createElement('style');
  ccThemeLoadingStyle.id='cc-theme-loading-style';
  ccThemeLoadingStyle.textContent=`
@@ -626,19 +555,10 @@ function showThemeLoadingScreen(){
  ccThemeLoadingScreen.id='cc-theme-loading-screen';
  ccThemeLoadingScreen.setAttribute('role','status');
  ccThemeLoadingScreen.setAttribute('aria-live','polite');
- ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">초기화가 늦으면 자동으로 다시 적용해요</div></div>';
+ ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">잠시만 기다리면 자동으로 열려요</div></div>';
  document.body.appendChild(ccThemeLoadingScreen);
- // Never reveal a half-themed scene just because a timeout elapsed.
- // If startup is slow, ask the already-running iframe userscript to reapply
- // its DOM-only theme pass. No browser/page reload is performed.
  if(ccThemeLoadingFailsafe)clearTimeout(ccThemeLoadingFailsafe);
- ccThemeLoadingFailsafe=0;
- ccClearThemeRepairTimers();
- ccThemeRepairTimers=[
-  setTimeout(ccRequestThemeRepair,1800),
-  setTimeout(ccRequestThemeRepair,3800),
-  setTimeout(()=>sendToCozyScene('theme-repair-final',null),6200)
- ];
+ ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),2600);
 }
 function hideThemeLoadingScreen(){
  const screen=ccThemeLoadingScreen;
@@ -652,10 +572,8 @@ function hideThemeLoadingScreen(){
   clearTimeout(ccThemeLoadingFailsafe);
   ccThemeLoadingFailsafe=0;
  }
- ccClearThemeRepairTimers();
 }
 showThemeLoadingScreen();
-ccEnsureSceneLoadWatcher();
 
 const defaults={avatarMode:'both',dialogueHighlight:true,removeNarration:false,lineBreakMode:'long',buttonSafeLane:false};
 function ccNormalizeSettings(p,base=defaults){
@@ -4640,7 +4558,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){ccStopped=true;ccRuntimeStarted=false;if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(ccWatchedScene){ccWatchedScene.removeEventListener('load',ccOnSceneLoad);ccWatchedScene=null;}ccClearThemeRepairTimers();if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){ccStopped=true;ccRuntimeStarted=false;if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -4726,11 +4644,7 @@ if(FRAME_CHAT){
  // Outer page: keep theme/site coordination, but never create chat floating controls.
  applyOpts();
  resetTurnRoom();
- ccEnsureSceneLoadWatcher();
- observer=new MutationObserver(()=>{
-  ccEnsureSceneLoadWatcher();
-  schedule();
- });
+ observer=new MutationObserver(schedule);
  observer.observe(document.documentElement,{childList:true,subtree:true});
  dateRefreshTimer=setInterval(()=>{
   if(document.querySelector('.cc-meta-date'))schedule();
