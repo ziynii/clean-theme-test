@@ -610,7 +610,7 @@ function showThemeLoadingScreen(){
  ccThemeLoadingScreen.id='cc-theme-loading-screen';
  ccThemeLoadingScreen.setAttribute('role','status');
  ccThemeLoadingScreen.setAttribute('aria-live','polite');
- ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">초기 UI를 맞추는 중이에요</div></div>';
+ ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">UI가 틀어진다면 새로고침 해주세요</div></div>';
  document.body.appendChild(ccThemeLoadingScreen);
  if(ccThemeLoadingFailsafe)clearTimeout(ccThemeLoadingFailsafe);
  ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),7200);
