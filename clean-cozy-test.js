@@ -190,19 +190,51 @@ function receiveCozyUIMessage(event){
  ccOuterOrigin=event.origin;
  const data=event.data;
  if(!data||data.type!=='cc-private-ui-v164')return;
- if(data.command==='theme-repair'){
+ if(data.command==='theme-repair'||data.command==='theme-repair-final'){
   // Recover from a slow/partial Zeta hydration without reloading the page.
+  const finalRepair=data.command==='theme-repair-final';
   ccFrameCoreReadySent=false;
   if(ccFrameCoreReadyTimer){
    clearTimeout(ccFrameCoreReadyTimer);
    ccFrameCoreReadyTimer=0;
   }
+
   if(!style?.isConnected)(document.head||document.documentElement).appendChild(style);
   markFrameChatRoot();
   applyOpts();
+
   if(FRAME_CHAT){
    ccEnsureFloatingControls();
-   schedule();
+
+   if(finalRepair){
+    // Final bounded recovery: run the visible theme pass directly, then wait
+    // two paints before acknowledging the outer mask. This prevents infinite
+    // loading if the normal computed-style canary never settles on Safari.
+    enhance();
+    enhanceHeader();
+    updateDialogueHighlight();
+    makeSendArrow();
+    ccApplyCaptureMode();
+
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+     if(ccStopped)return;
+     if(!style?.isConnected)(document.head||document.documentElement).appendChild(style);
+     markFrameChatRoot();
+
+     const log=document.querySelector('[role="log"][aria-label="Chat messages"]');
+     const composer=document.querySelector('[data-testid="composer-input-box"]');
+     if(!log||!composer||!document.body?.classList.contains('cc-frame-chat-root')){
+      schedule();
+      return;
+     }
+
+     ccFrameCoreReadySent=true;
+     ccPostToOuter({type:'clean-cozy-frame-core-ready-v1',recovered:true});
+     schedule();
+    }));
+   }else{
+    schedule();
+   }
   }
  }
  else if(data.command==='edit'){nativeEditButton()?.click();}
@@ -551,16 +583,10 @@ function ccRequestThemeRepair(){
 }
 function showThemeLoadingScreen(){
  if(!OUTER_ROOM)return;
- if(ccThemeLoadingScreen?.isConnected){
-  // The same outer document can survive while Zeta rebuilds/reloads its scene.
-  // Restart only the recovery timers; never force a page reload.
-  ccClearThemeRepairTimers();
-  ccThemeRepairTimers=[
-   setTimeout(ccRequestThemeRepair,2500),
-   setTimeout(ccRequestThemeRepair,5000)
-  ];
-  return;
- }
+ // Important: Zeta may reload/rebuild the scene several times during startup.
+ // If the mask is already visible, NEVER restart the recovery clock; otherwise
+ // repeated iframe load events can postpone repair forever.
+ if(ccThemeLoadingScreen?.isConnected)return;
  ccThemeLoadingStyle=document.createElement('style');
  ccThemeLoadingStyle.id='cc-theme-loading-style';
  ccThemeLoadingStyle.textContent=`
@@ -600,7 +626,7 @@ function showThemeLoadingScreen(){
  ccThemeLoadingScreen.id='cc-theme-loading-screen';
  ccThemeLoadingScreen.setAttribute('role','status');
  ccThemeLoadingScreen.setAttribute('aria-live','polite');
- ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">이 화면이 5초 이상 지속되면 새로고침 해주세요</div></div>';
+ ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">초기화가 늦으면 자동으로 다시 적용해요</div></div>';
  document.body.appendChild(ccThemeLoadingScreen);
  // Never reveal a half-themed scene just because a timeout elapsed.
  // If startup is slow, ask the already-running iframe userscript to reapply
@@ -609,8 +635,9 @@ function showThemeLoadingScreen(){
  ccThemeLoadingFailsafe=0;
  ccClearThemeRepairTimers();
  ccThemeRepairTimers=[
-  setTimeout(ccRequestThemeRepair,2500),
-  setTimeout(ccRequestThemeRepair,5000)
+  setTimeout(ccRequestThemeRepair,1800),
+  setTimeout(ccRequestThemeRepair,3800),
+  setTimeout(()=>sendToCozyScene('theme-repair-final',null),6200)
  ];
 }
 function hideThemeLoadingScreen(){
