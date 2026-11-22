@@ -63,6 +63,44 @@ function ccPostToOuter(message){
 let ccLastFrameReadyAt=0;
 let ccFrameCoreReadySent=false;
 let ccFrameCoreReadyTimer=0;
+let ccFrameReadyPollTimer=0;
+let ccFrameReadyPollDeadline=0;
+
+function ccStopFrameReadyPoll(){
+ if(ccFrameReadyPollTimer){
+  clearInterval(ccFrameReadyPollTimer);
+  ccFrameReadyPollTimer=0;
+ }
+ ccFrameReadyPollDeadline=0;
+}
+
+function ccStartFrameReadyPoll(){
+ if(!FRAME_CHAT||ccFrameCoreReadySent||ccFrameReadyPollTimer)return;
+ ccFrameReadyPollDeadline=performance.now()+6000;
+ ccFrameReadyPollTimer=setInterval(()=>{
+  if(ccStopped||ccFrameCoreReadySent){
+   ccStopFrameReadyPoll();
+   return;
+  }
+
+  announceFrameCoreReady();
+
+  // One final visible-theme pass before giving up the temporary startup poll.
+  if(performance.now()>=ccFrameReadyPollDeadline){
+   ccStopFrameReadyPoll();
+   if(ccStopped||ccFrameCoreReadySent)return;
+   if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
+   markFrameChatRoot();
+   ccEnsureFloatingControls();
+   enhance();
+   enhanceHeader();
+   updateDialogueHighlight();
+   makeSendArrow();
+   ccApplyCaptureMode();
+   announceFrameCoreReady();
+  }
+ },120);
+}
 
 function ccFrameThemeLooksReady(){
  if(!FRAME_CHAT)return false;
@@ -78,10 +116,29 @@ function ccFrameThemeLooksReady(){
  const modelButton=document.querySelector('header [data-testid="chat-header-model"]');
  if(modelButton && getComputedStyle(modelButton).display!=='none')return false;
 
- // If rendered chat rows are already present, at least one real bubble must
- // have completed Clean Cozy's DOM marking before the loading mask disappears.
- const renderedRows=log.querySelectorAll('div.flex.flex-row.items-start');
- if(renderedRows.length && !log.querySelector('[data-sentry-component="ChatBubbleContainer"]'))return false;
+ // The three Clean Cozy controls are created during the same frame startup.
+ // Requiring them prevents the loading mask from disappearing on a half-booted scene.
+ const toggle=document.getElementById('cc-toggle');
+ const edit=document.getElementById('cc-edit-shortcut');
+ const line=document.getElementById('cc-line-shortcut');
+ if(!toggle?.isConnected||!edit?.isConnected||!line?.isConnected)return false;
+
+ // Header centering is another visible canary. Do not require the header to exist
+ // on pages that genuinely render without it, but if it exists the theme must own it.
+ const headerProfile=document.querySelector('header [data-testid="chat-header-profile"]');
+ if(headerProfile && getComputedStyle(headerProfile).position!=='absolute')return false;
+
+ // Require one mapped bubble per role that is currently present, not every
+ // virtualized row. This is robust to Zeta's row recycling.
+ const leftRow=log.querySelector('div.flex.flex-row.items-start.pl-2');
+ if(leftRow && !log.querySelector('[data-sentry-component="LeftTextContent"] [data-sentry-component="ChatBubbleContainer"]'))return false;
+ const rightRow=log.querySelector('div.flex.flex-row.items-start.ml-auto.pr-2');
+ if(rightRow && !log.querySelector('[data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"]'))return false;
+
+ // If Zeta's narrator block is currently rendered, verify that the scene-specific
+ // Clean Cozy styling has actually reached it before declaring startup complete.
+ const narrator=log.querySelector('.message-context-menu-trigger.bg-gray-main');
+ if(narrator && getComputedStyle(narrator).borderTopStyle!=='dashed')return false;
 
  return true;
 }
@@ -97,17 +154,15 @@ function announceFrameCoreReady(){
   return;
  }
 
- // Require a real quiet/stability window. If Zeta mutates/hydrates the scene
- // again before 350ms passes, restart the clock instead of accepting the
- // first transient themed frame.
- if(ccFrameCoreReadyTimer){
-  clearTimeout(ccFrameCoreReadyTimer);
-  ccFrameCoreReadyTimer=0;
- }
+ // Start one short verification window and let it finish. schedule() can run
+ // many times because of Clean Cozy's own DOM work; those passes must not keep
+ // restarting the loading clock. The callback re-checks every visual canary.
+ if(ccFrameCoreReadyTimer)return;
  ccFrameCoreReadyTimer=setTimeout(()=>{
   ccFrameCoreReadyTimer=0;
   if(ccFrameCoreReadySent||!ccFrameThemeLooksReady())return;
   ccFrameCoreReadySent=true;
+  ccStopFrameReadyPoll();
   ccPostToOuter({type:'clean-cozy-frame-core-ready-v1'});
  },350);
 }
@@ -555,10 +610,10 @@ function showThemeLoadingScreen(){
  ccThemeLoadingScreen.id='cc-theme-loading-screen';
  ccThemeLoadingScreen.setAttribute('role','status');
  ccThemeLoadingScreen.setAttribute('aria-live','polite');
- ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">잠시만 기다리면 자동으로 열려요</div></div>';
+ ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">초기 UI를 맞추는 중이에요</div></div>';
  document.body.appendChild(ccThemeLoadingScreen);
  if(ccThemeLoadingFailsafe)clearTimeout(ccThemeLoadingFailsafe);
- ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),2600);
+ ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),7200);
 }
 function hideThemeLoadingScreen(){
  const screen=ccThemeLoadingScreen;
@@ -4558,7 +4613,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){ccStopped=true;ccRuntimeStarted=false;if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){ccStopped=true;ccRuntimeStarted=false;if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();ccStopFrameReadyPoll();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -4611,6 +4666,7 @@ function ccStartRuntimeOnce(){
  ccApplyCaptureMode();
 
  announceFrameCoreReady();
+ ccStartFrameReadyPoll();
  announceFrameControls(true);
 
  observer=new MutationObserver(records=>{
