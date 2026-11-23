@@ -2851,7 +2851,7 @@ body.cc-frame-chat-root section[role="dialog"][aria-label="대화 프로필"] bu
  color:var(--cc-accent-strong)!important;-webkit-text-fill-color:var(--cc-accent-strong)!important;
 }
 `;
-let panel=null,toggle=null,editShortcut=null,settingsBackdrop=null,settingsSaveButton=null,observer=null,scheduled=false,scheduleRaf=0,ccStopped=false;
+let panel=null,toggle=null,editShortcut=null,settingsBackdrop=null,settingsSaveButton=null,helpBackdrop=null,helpDialog=null,observer=null,scheduled=false,scheduleRaf=0,ccStopped=false;
 const sendOriginals=new Map();
 function makeSendArrow(){
  const svg=document.querySelector('[data-testid="chat-send-button"] svg');
@@ -2997,10 +2997,14 @@ let dialogueUpdating=false;
 const dialogueChatSignature=new WeakMap();
 function clearInlineDialogue(){
  const spans=document.querySelectorAll('span.'+dialogueInlineClass);
+ const chats=new Set();
  for(const span of spans){
   if(!span.isConnected)continue;
+  const chat=span.closest('.chat');
+  if(chat)chats.add(chat);
   span.replaceWith(...Array.from(span.childNodes));
  }
+ for(const chat of chats)dialogueChatSignature.delete(chat);
 }
 function updateDialogueHighlight(){
  if(!settings.dialogueHighlight || dialogueUpdating)return;
@@ -3013,10 +3017,17 @@ function updateDialogueHighlight(){
    '[data-sentry-component="RightTextContent"] [data-sentry-component="ChatBubbleContainer"] .chat'
   );
   for(const chat of chats){
-   // Skip chats whose rendered text has not changed since the last successful pass.
-   // This avoids running a TreeWalker over every old message on every DOM mutation.
+   // Skip only when both the text AND the exact wrappers created by the
+   // previous successful pass are still mounted in this chat. Zeta/React can
+   // rebuild a chat's children while keeping the same .chat element/text.
    const rawText=chat.textContent||'';
-   if(dialogueChatSignature.get(chat)===rawText)continue;
+   const cachedDialogue=dialogueChatSignature.get(chat);
+   if(
+    cachedDialogue?.text===rawText &&
+    Array.isArray(cachedDialogue.spans) &&
+    cachedDialogue.spans.length>0 &&
+    cachedDialogue.spans.every(span=>span?.isConnected && chat.contains(span))
+   )continue;
 
    // Loading indicators in a *different* Swiper slide must not block
    // completed dialogue in this slide. Zeta keeps the next-slide spinner
@@ -3043,7 +3054,10 @@ function updateDialogueHighlight(){
     textNode.parentNode.insertBefore(span,textNode);
     span.appendChild(textNode);
    }
-   dialogueChatSignature.set(chat,rawText);
+   dialogueChatSignature.set(chat,{
+    text:rawText,
+    spans:[...chat.querySelectorAll('span.'+dialogueInlineClass)]
+   });
   }
  }catch(error){console.warn('[Clean Cozy] 형광펜 적용 중 오류',error);}
  finally{dialogueUpdating=false;}
@@ -4533,12 +4547,12 @@ function makeControls(){
  panel.appendChild(saveWrap);
  updateSettingsSaveButton();
 
- const helpBackdrop=document.createElement('div');
+ helpBackdrop=document.createElement('div');
  helpBackdrop.id='cc-help-backdrop';
  helpBackdrop.hidden=true;
  helpBackdrop.setAttribute('aria-hidden','true');
 
- const helpDialog=document.createElement('div');
+ helpDialog=document.createElement('div');
  helpDialog.id='cc-help-dialog';
  helpDialog.hidden=true;
  helpDialog.setAttribute('role','dialog');
@@ -4627,7 +4641,7 @@ function makeControls(){
  document.addEventListener('pointerdown',onSettingsOutsidePointer,true);
  document.body.append(toggle,editShortcut,lineShortcut,settingsBackdrop,panel);applyOpts();updateActionAvailability();
 }
-function stop(){ccStopped=true;ccRuntimeStarted=false;ccDetachLogScrollRecovery();if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();ccStopFrameReadyPoll();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
+function stop(){ccStopped=true;ccRuntimeStarted=false;ccDetachLogScrollRecovery();if(scheduleRaf){cancelAnimationFrame(scheduleRaf);scheduleRaf=0;scheduled=false;}for(const timer of ccStartupTimers)clearTimeout(timer);ccStartupTimers=[];hideThemeLoadingScreen();ccStopFrameReadyPoll();if(ccFrameCoreReadyTimer){clearTimeout(ccFrameCoreReadyTimer);ccFrameCoreReadyTimer=0;}if(ccCaptureMode)ccSetCaptureMode(false);else ccCaptureUnwrapAll();document.querySelector('.cc-frame-chat-root')?.classList.remove('cc-frame-chat-root');clearInlineDialogue();restoreHeader();lineEditPending=false;if(lineEditOpenTimer)clearTimeout(lineEditOpenTimer);if(dateRefreshTimer)clearInterval(dateRefreshTimer);if(turnSaveTimer){clearTimeout(turnSaveTimer);turnSaveTimer=0;if(FRAME_CHAT)syncTurnStoreToOuter();}if(ccActionAvailabilityTimer)clearTimeout(ccActionAvailabilityTimer);document.removeEventListener('click',onSendClick,true);document.removeEventListener('keydown',onSendKey,true);document.removeEventListener('pointerdown',onSettingsOutsidePointer,true);if(OUTER_ROOM)window.removeEventListener('message',onCozyFrameReady);if(FRAME_CHAT)window.removeEventListener('message',receiveCozyUIMessage);document.documentElement.classList.remove('cc-inner-controls-ready');ccBootstrapObserver?.disconnect();ccBootstrapObserver=null;observer?.disconnect();toggle?.remove();editShortcut?.remove();lineShortcut?.remove();settingsBackdrop?.remove();panel?.remove();settingsSaveButton=null;ccClearSettingsSaveTimer();ccSettingsSavePending=null;helpBackdrop?.remove();helpDialog?.remove();helpBackdrop=null;helpDialog=null;actionButtons.clear();document.documentElement.classList.remove('cc-tools-ready');for(const [svg,old] of sendOriginals){
   if(!svg.isConnected)continue;
   svg.innerHTML=old.html;
   if(old.viewBox===null)svg.removeAttribute('viewBox');else svg.setAttribute('viewBox',old.viewBox);
@@ -6220,6 +6234,17 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
       if (IS_OUTER) {
         if (event.origin !== 'https://frame.pingpong.ai') return;
+
+        const scene = [...d.querySelectorAll('iframe')].find(frame => {
+          try {
+            return frame.contentWindow === event.source &&
+              /^https:\/\/frame\.pingpong\.ai\//i.test(frame.src || '');
+          } catch (_) {
+            return false;
+          }
+        });
+        if (!scene) return;
+
         if (data.type === 'SYNC') syncRemoteActions(data.items, event.source);
         else if (data.type === 'TOAST') toast(data.message || '');
         else if (data.type === 'DRAG_STATE') {
@@ -6231,10 +6256,6 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
             remoteControlGeometry = null;
             placeLauncher();
           } else {
-            const scene = [...d.querySelectorAll('iframe')].find(frame => {
-              try { return frame.contentWindow === event.source; } catch (_) { return false; }
-            });
-            if (!scene) return;
             const fr = scene.getBoundingClientRect();
             remoteControlGeometry = {
               left: fr.left + Number(data.line.left || 0),
@@ -6253,6 +6274,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
       if (IS_FRAME_WORKER) {
         if (!/(^https:\/\/zeta-ai\.io$)|(^https:\/\/[^/]+\.zeta-ai\.io$)/i.test(event.origin)) return;
+        if (event.source !== w.parent) return;
         if (data.type === 'GEOMETRY') {
           remoteGeometry = { launcher: data.launcher, frame: data.frame };
         } else if (data.type === 'REQUEST_CONTROL_GEOMETRY') {
