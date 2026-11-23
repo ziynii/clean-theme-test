@@ -4876,7 +4876,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   let remoteGeometry = null;
   let remoteControlGeometry = null;
   let remoteDragHover = false;
-  let geometryInterval = 0;
+  let geometryRaf = 0;
 
   try { w[INSTANCE]?.destroy?.(); } catch (_) {}
 
@@ -4907,7 +4907,6 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   let toastNode = null;
   let observer = null;
   let scanTimer = 0;
-  let restoreInterval = 0;
   let open = false;
   let managing = false;
   let launcherDrag = null;
@@ -6205,6 +6204,15 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     });
   }
 
+  function queueGeometrySync() {
+    if (geometryRaf) return;
+    geometryRaf = w.requestAnimationFrame(() => {
+      geometryRaf = 0;
+      if (IS_OUTER) sendGeometryToFrameWorkers();
+      else if (IS_FRAME_WORKER) sendControlGeometryToOuter();
+    });
+  }
+
   function installMessaging() {
     on(w, 'message', event => {
       const data = event.data;
@@ -6237,7 +6245,7 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
             placeLauncher();
           }
         } else if (data.type === 'HELLO') {
-          sendGeometryToFrameWorkers();
+          queueGeometrySync();
           try { event.source?.postMessage({ channel: CHANNEL, type: 'REQUEST_CONTROL_GEOMETRY' }, '*'); } catch (_) {}
         }
         return;
@@ -6505,20 +6513,19 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
       scanTimer = w.setTimeout(() => {
         refreshRoots();
         if (savedEntries.size) restoreSavedEntries();
-        if (IS_FRAME_WORKER) sendControlGeometryToOuter();
-      }, 140);
+        queueGeometrySync();
+      }, 160);
     });
     observer.observe(d.documentElement, { childList: true, subtree: true });
-    restoreInterval = w.setInterval(() => {
-      if (savedEntries.size) restoreSavedEntries();
-    }, 2500);
   }
 
   function destroy() {
     clearTimeout(scanTimer);
     clearTimeout(toastTimer);
-    clearInterval(restoreInterval);
-    clearInterval(geometryInterval);
+    if (geometryRaf) {
+      w.cancelAnimationFrame(geometryRaf);
+      geometryRaf = 0;
+    }
     observer?.disconnect();
     disposers.splice(0).forEach(fn => { try { fn(); } catch (_) {} });
     restoreAllHidden();
@@ -6534,24 +6541,37 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
     if (IS_OUTER) {
       createUI();
-      geometryInterval = w.setInterval(sendGeometryToFrameWorkers, 700);
-      on(w, 'resize', () => { requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+      on(w, 'resize', () => { requestAnimationFrame(placePanel); queueGeometrySync(); }, { passive: true });
+      on(w, 'scroll', queueGeometrySync, { passive: true, capture: true });
       if (w.visualViewport) {
-        on(w.visualViewport, 'resize', () => { requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
-        on(w.visualViewport, 'scroll', () => { requestAnimationFrame(placePanel); sendGeometryToFrameWorkers(); }, { passive: true });
+        on(w.visualViewport, 'resize', () => { requestAnimationFrame(placePanel); queueGeometrySync(); }, { passive: true });
+        on(w.visualViewport, 'scroll', () => { requestAnimationFrame(placePanel); queueGeometrySync(); }, { passive: true });
       }
     } else if (IS_FRAME_WORKER) {
-      on(w, 'resize', sendControlGeometryToOuter, { passive: true });
+      on(w, 'resize', queueGeometrySync, { passive: true });
+      on(w, 'scroll', queueGeometrySync, { passive: true, capture: true });
       if (w.visualViewport) {
-        on(w.visualViewport, 'resize', sendControlGeometryToOuter, { passive: true });
-        on(w.visualViewport, 'scroll', sendControlGeometryToOuter, { passive: true });
+        on(w.visualViewport, 'resize', queueGeometrySync, { passive: true });
+        on(w.visualViewport, 'scroll', queueGeometrySync, { passive: true });
       }
     }
+
+    on(w, 'pageshow', () => {
+      if (savedEntries.size) restoreSavedEntries();
+      queueGeometrySync();
+    }, { passive: true });
+
+    on(d, 'visibilitychange', () => {
+      if (d.visibilityState !== 'visible') return;
+      if (savedEntries.size) restoreSavedEntries();
+      queueGeometrySync();
+    });
 
     // outer 자체 플로팅 도구와 iframe 내부 플로팅 도구 모두 감지한다.
     refreshRoots(true);
     if (savedEntries.size) restoreSavedEntries();
     startObserver();
+    queueGeometrySync();
     notifyOuter();
   }
 
@@ -6593,8 +6613,9 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
   let barEl = null;
   let observer = null;
   let refreshTimer = 0;
-  let accentTimer = 0;
-  let paintTimer = 0;
+  let accentSendTimer = 0;
+  let lastAccentSignature = '';
+  const accentStartupTimers = [];
   let frameAccent = null;
   let pos = null;
   let userMoved = false;
@@ -6799,9 +6820,13 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     const payload = bubbleAccentPayload();
     if (!payload) return;
 
+    const signature = `${payload.border || ''}|${payload.bg || ''}`;
+    if (signature === lastAccentSignature) return;
+
     const origin = parentOrigin();
     if (!origin) return;
 
+    lastAccentSignature = signature;
     try {
       w.parent.postMessage({
         channel: ACCENT_CHANNEL,
@@ -6810,10 +6835,27 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
     } catch (_) {}
   }
 
+  function queueFrameAccent(delay = 120) {
+    if (!IS_FRAME || stopped) return;
+    clearTimeout(accentSendTimer);
+    accentSendTimer = setTimeout(() => {
+      accentSendTimer = 0;
+      sendFrameAccent();
+    }, delay);
+  }
+
   function installAccentBridge() {
     if (IS_FRAME) {
-      sendFrameAccent();
-      accentTimer = w.setInterval(sendFrameAccent, 1200);
+      // Startup one-shots cover late Safari hydration without permanent polling.
+      queueFrameAccent(0);
+      [450, 1400, 2800].forEach(ms => {
+        accentStartupTimers.push(setTimeout(() => queueFrameAccent(0), ms));
+      });
+
+      qOn(w, 'pageshow', () => queueFrameAccent(0), { passive: true });
+      qOn(d, 'visibilitychange', () => {
+        if (d.visibilityState === 'visible') queueFrameAccent(0);
+      });
       return;
     }
 
@@ -7116,26 +7158,35 @@ html body.cc-frame-chat-root .cc-native-toolbar-button{
 
     discover();
 
-    observer = new MutationObserver(queueDiscover);
+    observer = new MutationObserver(() => {
+      queueDiscover();
+      if (IS_FRAME) queueFrameAccent();
+    });
     observer.observe(d.documentElement, { childList: true, subtree: true });
 
     qOn(w, 'resize', () => {
-      if (!barEl?.isConnected) return;
-      clampPos(barEl);
-      applyStyle(barEl, true);
+      if (barEl?.isConnected) {
+        clampPos(barEl);
+        applyStyle(barEl, true);
+      }
+      if (IS_FRAME) queueFrameAccent();
     }, { passive: true });
 
-    // Theme/bubble color may change without recreating the bar.
-    paintTimer = w.setInterval(() => {
-      if (barEl?.isConnected && visible(barEl)) paintBar(barEl);
-    }, 1200);
+    qOn(w, 'pageshow', () => {
+      if (barEl?.isConnected) applyStyle(barEl, true);
+    }, { passive: true });
+
+    qOn(d, 'visibilitychange', () => {
+      if (d.visibilityState === 'visible' && barEl?.isConnected) applyStyle(barEl, true);
+    });
   }
 
   function stop() {
     stopped = true;
     clearTimeout(refreshTimer);
-    clearInterval(accentTimer);
-    clearInterval(paintTimer);
+    clearTimeout(accentSendTimer);
+    accentSendTimer = 0;
+    accentStartupTimers.splice(0).forEach(timer => clearTimeout(timer));
     observer?.disconnect();
     pendingStore.clear();
     quickDisposers.splice(0).forEach(fn => { try { fn(); } catch (_) {} });
