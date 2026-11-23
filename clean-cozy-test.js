@@ -74,32 +74,45 @@ function ccStopFrameReadyPoll(){
  ccFrameReadyPollDeadline=0;
 }
 
+function ccStartupRepairPass(){
+ if(ccStopped||!FRAME_CHAT||!ccRuntimeStarted)return;
+ if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
+
+ // Startup-only repair pass. Re-run only the visible/core DOM work that can be
+ // lost when iOS Safari / Zeta replaces hydrated nodes during the first seconds.
+ markFrameChatRoot();
+ ccAttachLogScrollRecovery();
+ ccEnsureFloatingControls();
+ enhance();
+ enhanceHeader();
+ updateDialogueHighlight();
+ makeSendArrow();
+ ccApplyCaptureMode();
+ announceFrameControls();
+ announceFrameCoreReady();
+}
+
 function ccStartFrameReadyPoll(){
  if(!FRAME_CHAT||ccFrameCoreReadySent||ccFrameReadyPollTimer)return;
- ccFrameReadyPollDeadline=performance.now()+6000;
+
+ // Keep actively repairing only during startup. This watchdog is temporary and
+ // disappears immediately after the frame reports a complete themed state.
+ ccFrameReadyPollDeadline=performance.now()+10000;
+
+ ccStartupRepairPass();
+
  ccFrameReadyPollTimer=setInterval(()=>{
   if(ccStopped||ccFrameCoreReadySent){
    ccStopFrameReadyPoll();
    return;
   }
 
-  announceFrameCoreReady();
+  ccStartupRepairPass();
 
-  // One final visible-theme pass before giving up the temporary startup poll.
   if(performance.now()>=ccFrameReadyPollDeadline){
    ccStopFrameReadyPoll();
-   if(ccStopped||ccFrameCoreReadySent)return;
-   if(!style.isConnected)(document.head||document.documentElement).appendChild(style);
-   markFrameChatRoot();
-   ccEnsureFloatingControls();
-   enhance();
-   enhanceHeader();
-   updateDialogueHighlight();
-   makeSendArrow();
-   ccApplyCaptureMode();
-   announceFrameCoreReady();
   }
- },120);
+ },320);
 }
 
 function ccFrameThemeLooksReady(){
@@ -613,7 +626,7 @@ function showThemeLoadingScreen(){
  ccThemeLoadingScreen.innerHTML='<div class="cc-theme-loading-wrap"><div class="cc-theme-loading-inner"><span class="cc-theme-loading-dot" aria-hidden="true"></span><span>테마 불러오는 중</span></div><div class="cc-theme-loading-hint">UI가 틀어진다면 새로고침 해주세요</div></div>';
  document.body.appendChild(ccThemeLoadingScreen);
  if(ccThemeLoadingFailsafe)clearTimeout(ccThemeLoadingFailsafe);
- ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),7200);
+ ccThemeLoadingFailsafe=setTimeout(()=>hideThemeLoadingScreen(),9000);
 }
 function hideThemeLoadingScreen(){
  const screen=ccThemeLoadingScreen;
@@ -4755,8 +4768,8 @@ function ccStartRuntimeOnce(){
 
  // Zeta can finish hydrating message rows after the chat log/composer already exist.
  // Re-run the normal DOM pass a few times during startup only; no permanent polling.
- ccStartupTimers=[300,700,1400,2500,4000].map(ms=>setTimeout(()=>{
-  if(ccRuntimeStarted&&!ccStopped) schedule();
+ ccStartupTimers=[450,1200,2600].map(ms=>setTimeout(()=>{
+  if(ccRuntimeStarted&&!ccStopped&&!ccFrameCoreReadySent)ccStartupRepairPass();
  },ms));
 
  dateRefreshTimer=setInterval(()=>{
